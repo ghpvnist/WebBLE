@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Badge Image Uploader</title>
+  <!-- Espruino Puck / Web Bluetooth Helper -->
+  <script src="https://www.puck-js.com/puck.js"></script>
+  <style>
+    body { font-family: sans-serif; padding: 20px; text-align: center; }
+    button, input { margin: 10px 0; padding: 12px 18px; font-size: 16px; border-radius: 8px; }
+    canvas { border: 1px solid #ccc; max-width: 100%; height: auto; margin-top: 10px; }
+    #status { margin-top: 15px; color: #444; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h2>Badge Image Sender</h2>
+  
+  <!-- File picker opens Google Photos / Camera Roll -->
+  <input type="file" id="imageInput" accept="image/*"><br>
+  <canvas id="preview" width="400" height="240"></canvas><br>
+  
+  <button id="sendBtn" disabled>Send to Badge via BLE</button>
+  <div id="status">Select an image to preview.</div>
+
+  <script>
+    const imageInput = document.getElementById('imageInput');
+    const canvas = document.getElementById('preview');
+    const ctx = canvas.getContext('2d');
+    const sendBtn = document.getElementById('sendBtn');
+    const status = document.getElementById('status');
+
+    let binaryString = "";
+
+    // 1. Pick and preprocess image
+    imageInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const img = new Image();
+      img.onload = () => {
+        // Draw and scale to 400x240
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 400, 240);
+        ctx.drawImage(img, 0, 0, 400, 240);
+
+        // Convert to 2bpp (Black: 0, White: 1, Red: 2, Yellow: 3)
+        const imgData = ctx.getImageData(0, 0, 400, 240);
+        const d = imgData.data;
+        const totalPixels = 400 * 240;
+        const buffer = new Uint8Array(totalPixels / 4); // 4 pixels per byte
+
+        for (let i = 0; i < totalPixels; i++) {
+          const r = d[i * 4];
+          const g = d[i * 4 + 1];
+          const b = d[i * 4 + 2];
+
+          // Simple color quantization: 1=white, 0=black
+          const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+          const val = luminance > 128 ? 1 : 0;
+
+          // Pack 2 bits per pixel
+          const byteIdx = Math.floor(i / 4);
+          const bitShift = (3 - (i % 4)) * 2;
+          buffer[byteIdx] |= (val << bitShift);
+        }
+
+        // Convert to Base64 string for transmission
+        let binary = "";
+        for (let j = 0; j < buffer.length; j++) {
+          binary += String.fromCharCode(buffer[j]);
+        }
+        binaryString = btoa(binary);
+
+        status.innerText = "Ready to send!";
+        sendBtn.disabled = false;
+      };
+      img.src = URL.createObjectURL(file);
+    });
+
+    // 2. Send chunked Base64 data over Web Bluetooth
+    sendBtn.addEventListener('click', async () => {
+      sendBtn.disabled = true;
+      status.innerText = "Connecting to badge...";
+
+      const chunkSize = 64; // Safe BLE transmission size
+      const totalChunks = Math.ceil(binaryString.length / chunkSize);
+
+      try {
+        // Connect and clear previous buffer
+        await new Promise((res) => Puck.write("imgData='';\n", res));
+
+        for (let i = 0; i < totalChunks; i++) {
+          status.innerText = `Sending: ${Math.round(((i + 1) / totalChunks) * 100)}%`;
+          const chunk = binaryString.slice(i * chunkSize, (i + 1) * chunkSize);
+          await new Promise((res) => Puck.write(`rcvChunk('${chunk}');\n`, res));
+        }
+
+        // Trigger badge rendering
+        status.innerText = "Processing & refreshing ePaper...";
+        await new Promise((res) => Puck.write("rcvEnd();\n", res));
+        status.innerText = "Done! Image sent.";
+      } catch (err) {
+        status.innerText = "Transfer error: " + err;
+      } finally {
+        sendBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
