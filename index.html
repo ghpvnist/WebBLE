@@ -87,8 +87,8 @@
     <canvas id="preview" width="400" height="240"></canvas>
 
     <div class="controls">
-      <button id="usbBtn" class="usb" disabled>⚡ Upload via USB (~1.5s)</button>
-      <button id="uploadBtn" class="primary" disabled>📶 Upload via Bluetooth (~10s)</button>
+      <button id="usbBtn" class="usb" disabled>⚡ Upload via USB (~3s)</button>
+      <button id="uploadBtn" class="primary" disabled>📶 Upload via Bluetooth (~12s)</button>
     </div>
 
     <progress id="progressBar" value="0" max="100"></progress>
@@ -248,7 +248,7 @@
       return btoa(binStr);
     }
 
-    // --- 1. WIRED USB UPLOAD (Web Serial API - ~1.5 seconds) ---
+    // --- 1. WIRED USB UPLOAD (Row-aligned 100-byte chunks = zero FIFO overflow or jitter) ---
     usbBtn.addEventListener("click", async () => {
       if (!navigator.serial) {
         statusEl.textContent = "Web Serial is not supported in this browser.";
@@ -267,19 +267,19 @@
         const enc = new TextEncoder();
 
         statusEl.textContent = "Initializing badge buffer over USB...";
-        await writer.write(enc.encode("\x10USB.setConsole();s();\n"));
-        await new Promise((r) => setTimeout(r, 80));
+        await writer.write(enc.encode("\x10s();\n"));
+        await new Promise((r) => setTimeout(r, 100));
 
         progressBar.style.display = "block";
         progressBar.value = 0;
         const startTime = performance.now();
 
-        const RAW_STEP = 360; // 480 Base64 chars per line over USB
+        // 100 bytes = exactly 1 row of 400 pixels (136 Base64 chars, fits inside 256B hardware FIFO)
+        const RAW_STEP = 100;
         for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
           const b64 = toBase64(rawPayload.subarray(offset, offset + RAW_STEP));
-          await writer.write(enc.encode(`\x10u("${b64}");\n`));
-          // 12ms pause lets Espruino decode Base64 without overflowing serial RX buffer
-          await new Promise((r) => setTimeout(r, 12));
+          await writer.write(enc.encode(`\x10u(${offset},"${b64}");\n`));
+          await new Promise((r) => setTimeout(r, 14));
 
           const doneBytes = Math.min(rawPayload.byteLength, offset + RAW_STEP);
           const pct = Math.round((doneBytes / rawPayload.byteLength) * 100);
@@ -305,28 +305,18 @@
       }
     });
 
-    // --- 2. FAST BLUETOOTH UPLOAD (Uses high MTU + unacknowledged bursts) ---
-    let blePacketSize = 128; // Negotiated BLE 4.2+ DLE packet size (auto-falls back to 20 if needed)
-
+    // --- 2. BLUETOOTH UPLOAD (Pure writeValueWithoutResponse, row-aligned) ---
     async function sendBleFast(rxChar, cmdStr) {
       const bytes = new TextEncoder().encode(cmdStr);
-      for (let i = 0; i < bytes.length; i += blePacketSize) {
-        const chunk = bytes.slice(i, i + blePacketSize);
-        try {
-          if (rxChar.writeValueWithoutResponse) {
-            await rxChar.writeValueWithoutResponse(chunk);
-            await new Promise((r) => setTimeout(r, 10));
-          } else {
-            await rxChar.writeValue(chunk);
-          }
-        } catch (e) {
-          if (blePacketSize > 20) {
-            blePacketSize = 20;
-            i -= 128; // Retry slice at 20 bytes
-            continue;
-          }
-          throw e;
+      const CHUNK_SZ = 60;
+      for (let i = 0; i < bytes.length; i += CHUNK_SZ) {
+        const chunk = bytes.slice(i, i + CHUNK_SZ);
+        if (rxChar.writeValueWithoutResponse) {
+          await rxChar.writeValueWithoutResponse(chunk);
+        } else {
+          await rxChar.writeValue(chunk);
         }
+        await new Promise((r) => setTimeout(r, 18));
       }
     }
 
@@ -349,22 +339,17 @@
         const rxChar = await service.getCharacteristic(NUS_RX_UUID);
 
         statusEl.textContent = "Initializing badge buffer...";
-        await rxChar.writeValue(new TextEncoder().encode("\x10s();\n"));
-        await new Promise((r) => setTimeout(r, 60));
+        await sendBleFast(rxChar, "\x10Bluetooth.setConsole();s();\n");
+        await new Promise((r) => setTimeout(r, 100));
 
         progressBar.style.display = "block";
         progressBar.value = 0;
         const startTime = performance.now();
 
-        const RAW_STEP = 180;
+        const RAW_STEP = 100;
         for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
           const b64 = toBase64(rawPayload.subarray(offset, offset + RAW_STEP));
-          await sendBleFast(rxChar, `\x10u("${b64}");\n`);
-
-          // Every 8 chunks, do 1 acknowledged write to sync flow control with ESP32
-          if ((offset / RAW_STEP) % 8 === 7) {
-            await rxChar.writeValue(new TextEncoder().encode("\n"));
-          }
+          await sendBleFast(rxChar, `\x10u(${offset},"${b64}");\n`);
 
           const doneBytes = Math.min(rawPayload.byteLength, offset + RAW_STEP);
           const pct = Math.round((doneBytes / rawPayload.byteLength) * 100);
@@ -373,7 +358,7 @@
         }
 
         statusEl.textContent = "Refreshing ePaper display...";
-        await rxChar.writeValue(new TextEncoder().encode("\x10e();\n"));
+        await sendBleFast(rxChar, "\x10e();\n");
 
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
         statusEl.textContent = `BLE Upload complete in ${elapsed}s! Badge is now drawing your image.`;
