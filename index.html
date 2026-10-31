@@ -276,4 +276,118 @@
 
         const RAW_STEP = 360; // 480 Base64 chars per line over USB
         for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
-          const b64 = toBase64(rawPayload.subarray(offset,
+          const b64 = toBase64(rawPayload.subarray(offset, offset + RAW_STEP));
+          await writer.write(enc.encode(`\x10u("${b64}");\n`));
+          // 12ms pause lets Espruino decode Base64 without overflowing serial RX buffer
+          await new Promise((r) => setTimeout(r, 12));
+
+          const doneBytes = Math.min(rawPayload.byteLength, offset + RAW_STEP);
+          const pct = Math.round((doneBytes / rawPayload.byteLength) * 100);
+          progressBar.value = pct;
+          statusEl.textContent = `Uploading via USB... ${pct}% (${doneBytes} / 24000 bytes)`;
+        }
+
+        statusEl.textContent = "Refreshing ePaper display...";
+        await writer.write(enc.encode("\x10e();\n"));
+        await new Promise((r) => setTimeout(r, 300));
+
+        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+        statusEl.textContent = `USB Upload complete in ${elapsed}s! Badge is refreshing.`;
+      } catch (err) {
+        statusEl.textContent = "USB Error: " + err.message;
+      } finally {
+        if (writer) writer.releaseLock();
+        if (port) {
+          try { await port.close(); } catch (e) {}
+        }
+        usbBtn.disabled = false;
+        uploadBtn.disabled = false;
+      }
+    });
+
+    // --- 2. FAST BLUETOOTH UPLOAD (Uses high MTU + unacknowledged bursts) ---
+    let blePacketSize = 128; // Negotiated BLE 4.2+ DLE packet size (auto-falls back to 20 if needed)
+
+    async function sendBleFast(rxChar, cmdStr) {
+      const bytes = new TextEncoder().encode(cmdStr);
+      for (let i = 0; i < bytes.length; i += blePacketSize) {
+        const chunk = bytes.slice(i, i + blePacketSize);
+        try {
+          if (rxChar.writeValueWithoutResponse) {
+            await rxChar.writeValueWithoutResponse(chunk);
+            await new Promise((r) => setTimeout(r, 10));
+          } else {
+            await rxChar.writeValue(chunk);
+          }
+        } catch (e) {
+          if (blePacketSize > 20) {
+            blePacketSize = 20;
+            i -= 128; // Retry slice at 20 bytes
+            continue;
+          }
+          throw e;
+        }
+      }
+    }
+
+    uploadBtn.addEventListener("click", async () => {
+      if (!navigator.bluetooth || !rawPayload) return;
+
+      try {
+        uploadBtn.disabled = true;
+        usbBtn.disabled = true;
+        statusEl.textContent = "Requesting Bluetooth device...";
+
+        const device = await navigator.bluetooth.requestDevice({
+          acceptAllDevices: true,
+          optionalServices: [NUS_SERVICE_UUID]
+        });
+
+        statusEl.textContent = `Connecting to ${device.name || "Badge"}...`;
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(NUS_SERVICE_UUID);
+        const rxChar = await service.getCharacteristic(NUS_RX_UUID);
+
+        statusEl.textContent = "Initializing badge buffer...";
+        await rxChar.writeValue(new TextEncoder().encode("\x10s();\n"));
+        await new Promise((r) => setTimeout(r, 60));
+
+        progressBar.style.display = "block";
+        progressBar.value = 0;
+        const startTime = performance.now();
+
+        const RAW_STEP = 180;
+        for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
+          const b64 = toBase64(rawPayload.subarray(offset, offset + RAW_STEP));
+          await sendBleFast(rxChar, `\x10u("${b64}");\n`);
+
+          // Every 8 chunks, do 1 acknowledged write to sync flow control with ESP32
+          if ((offset / RAW_STEP) % 8 === 7) {
+            await rxChar.writeValue(new TextEncoder().encode("\n"));
+          }
+
+          const doneBytes = Math.min(rawPayload.byteLength, offset + RAW_STEP);
+          const pct = Math.round((doneBytes / rawPayload.byteLength) * 100);
+          progressBar.value = pct;
+          statusEl.textContent = `Uploading via BLE... ${pct}% (${doneBytes} / 24000 bytes)`;
+        }
+
+        statusEl.textContent = "Refreshing ePaper display...";
+        await rxChar.writeValue(new TextEncoder().encode("\x10e();\n"));
+
+        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+        statusEl.textContent = `BLE Upload complete in ${elapsed}s! Badge is now drawing your image.`;
+
+        setTimeout(() => {
+          if (device.gatt.connected) device.gatt.disconnect();
+        }, 1500);
+      } catch (err) {
+        statusEl.textContent = "BLE Error: " + err.message;
+      } finally {
+        uploadBtn.disabled = false;
+        usbBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
