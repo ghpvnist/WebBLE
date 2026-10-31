@@ -15,10 +15,35 @@
       color: #0f172a;
     }
     .app-shell {
+      position: relative;
       background: #ffffff;
       padding: 24px;
       border-radius: 16px;
       box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+      border: 2px solid transparent;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    .app-shell.drop-active {
+      border-color: #2563eb;
+      background: #eff6ff;
+    }
+    .drop-banner {
+      display: none;
+      position: absolute;
+      inset: 12px;
+      border: 2px dashed #2563eb;
+      border-radius: 12px;
+      background: rgba(239, 246, 255, 0.92);
+      color: #1d4ed8;
+      font-size: 16px;
+      font-weight: 700;
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+      pointer-events: none;
+    }
+    .app-shell.drop-active .drop-banner {
+      display: flex;
     }
     .header-row {
       display: flex;
@@ -63,18 +88,28 @@
       flex-wrap: wrap;
       margin-bottom: 14px;
     }
-    button, select, .file-label {
+    button, select, .file-label, input[type="text"] {
       padding: 8px 12px;
       font-size: 13px;
       font-weight: 600;
       border-radius: 8px;
       border: 1px solid #cbd5e1;
-      cursor: pointer;
       background: #ffffff;
       color: #0f172a;
+    }
+    button, select, .file-label {
+      cursor: pointer;
       display: inline-flex;
       align-items: center;
       gap: 6px;
+    }
+    input[type="text"] {
+      font-weight: 500;
+      outline: none;
+    }
+    input[type="text"]:focus {
+      border-color: #2563eb;
+      box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
     }
     .file-label {
       background: #eff6ff;
@@ -234,6 +269,45 @@
       border-color: #16a34a;
       box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
     }
+    /* Text Overlay Bar */
+    .overlay-box {
+      padding: 12px 14px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .overlay-header {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #475569;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .overlay-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .overlay-row input[type="text"] {
+      flex: 1;
+      min-width: 140px;
+      padding: 7px 10px;
+      font-size: 13px;
+    }
+    .overlay-row select {
+      padding: 6px 10px;
+      font-size: 12px;
+      flex: 1;
+      min-width: 120px;
+    }
     .sliders-box {
       padding: 10px 14px;
       background: #f8fafc;
@@ -320,7 +394,7 @@
     }
     button.danger:hover:not(:disabled) { background: #fee2e2; }
     button.small { padding: 4px 8px; font-size: 11px; }
-    button:disabled {
+    button:disabled, select:disabled, input:disabled {
       background: #cbd5e1 !important;
       color: #64748b !important;
       border-color: transparent !important;
@@ -342,7 +416,9 @@
   </style>
 </head>
 <body>
-  <div class="app-shell">
+  <div id="appShell" class="app-shell">
+    <div class="drop-banner">📥 Drop image(s) here to add to your Badge Deck</div>
+
     <div class="header-row">
       <h2>ePaper Badge Studio</h2>
       <div class="seg-group" title="Select connection method for uploads and remote controls">
@@ -354,6 +430,7 @@
     <div class="toolbar">
       <label class="file-label" for="fileInput">➕ Add Images</label>
       <input type="file" id="fileInput" accept="image/*" multiple />
+      <button id="pasteImgBtn" class="secondary" type="button" title="Paste image from clipboard (Cmd+V / Ctrl+V)">📋 Paste</button>
 
       <div class="seg-group">
         <button id="horizBtn" class="seg-btn" type="button">🖼️ Horizontal</button>
@@ -384,12 +461,12 @@
             <span id="cardCounter" class="badge-pill">No images loaded</span>
             <span id="deviceStatusPill" class="device-pill pending" style="display:none;">⏳ Not on Device</span>
           </div>
-          <span id="cardName">Select one or more photos above</span>
+          <span id="cardName">Drop, paste (Cmd+V), or select photos</span>
           <button id="removeCardBtn" class="danger small" type="button" style="display:none;">✕ Remove</button>
         </div>
 
-        <canvas id="preview" width="240" height="400" style="max-width: 220px; width: 100%;" title="Scroll/pinch to zoom · Drag to adjust crop"></canvas>
-        <div id="dragHint" class="drag-hint">🔍 Scroll or pinch to zoom · ✋ Drag to frame · 🎯 Center to reset</div>
+        <canvas id="preview" width="240" height="400" style="max-width: 220px; width: 100%;" title="Scroll/pinch to zoom · Drag to adjust crop · Drop or Cmd+V to add images"></canvas>
+        <div id="dragHint" class="drag-hint">📥 Drop files or press <b>Cmd+V</b> to paste · 🔍 Scroll/pinch to zoom · ✋ Drag to frame</div>
 
         <div class="card-bottom-bar">
           <span id="cardMeta">240×400 · 100% · Centered</span>
@@ -402,20 +479,52 @@
 
     <div id="deckStrip" class="deck-strip"></div>
 
+    <!-- Custom Text / Name-Badge Overlay Bar -->
+    <div class="overlay-box">
+      <div class="overlay-header">
+        <span>🏷️ Text / Name-Badge Overlay</span>
+        <button id="clearTextBtn" class="secondary small" type="button" disabled>✕ Clear Text</button>
+      </div>
+      <div class="overlay-row">
+        <input type="text" id="titleInput" placeholder="Title or Name (e.g. Alex Rivera)" maxlength="40" disabled />
+        <input type="text" id="subtitleInput" placeholder="Subtitle / Role (optional)" maxlength="50" disabled />
+      </div>
+      <div class="overlay-row">
+        <select id="bannerPos" title="Overlay banner position" disabled>
+          <option value="bottom" selected>Position: Bottom Banner</option>
+          <option value="top">Position: Top Banner</option>
+          <option value="center">Position: Center Name Tag</option>
+          <option value="float_bottom">Position: Bottom Floating Text</option>
+        </select>
+        <select id="bannerTheme" title="Banner ePaper color theme" disabled>
+          <option value="w_on_k" selected>Theme: White on Black</option>
+          <option value="k_on_w">Theme: Black on White</option>
+          <option value="k_on_y">Theme: Black on Yellow</option>
+          <option value="w_on_r">Theme: White on Red</option>
+          <option value="y_on_k">Theme: Yellow on Black</option>
+        </select>
+        <select id="bannerSize" title="Overlay text size" disabled>
+          <option value="sm">Size: Small</option>
+          <option value="md" selected>Size: Medium</option>
+          <option value="lg">Size: Large</option>
+        </select>
+      </div>
+    </div>
+
     <div class="sliders-box">
       <div class="slider-row">
         <label for="zoomSlider">Zoom: <span id="zVal">100%</span></label>
-        <input type="range" id="zoomSlider" min="100" max="400" step="5" value="100" />
-        <button id="resetZoomBtn" class="secondary small" type="button">1×</button>
+        <input type="range" id="zoomSlider" min="100" max="400" step="5" value="100" disabled />
+        <button id="resetZoomBtn" class="secondary small" type="button" disabled>1×</button>
       </div>
       <div class="slider-row">
         <label for="brightnessSlider">Brightness: <span id="bVal">0</span></label>
-        <input type="range" id="brightnessSlider" min="-100" max="100" value="0" />
+        <input type="range" id="brightnessSlider" min="-100" max="100" value="0" disabled />
       </div>
       <div class="slider-row">
         <label for="contrastSlider">Contrast: <span id="cVal">0</span></label>
-        <input type="range" id="contrastSlider" min="-100" max="100" value="0" />
-        <button id="resetAdjustBtn" class="secondary small" type="button">Reset</button>
+        <input type="range" id="contrastSlider" min="-100" max="100" value="0" disabled />
+        <button id="resetAdjustBtn" class="secondary small" type="button" disabled>Reset</button>
       </div>
     </div>
 
@@ -438,7 +547,7 @@
     </div>
 
     <progress id="progressBar" value="0" max="100"></progress>
-    <div id="status">Add one or more images to preview in the card deck. Scroll or use the Zoom slider to zoom in and drag to frame.</div>
+    <div id="status">Drop images here, press Cmd+V / Ctrl+V to paste from your iPhone or Mac clipboard, or click ➕ Add Images.</div>
   </div>
 
   <script>
@@ -450,7 +559,7 @@
     const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
-    const STORAGE_KEY      = "epaper_badge_uploaded_v8";
+    const STORAGE_KEY      = "epaper_badge_uploaded_v10";
 
     const PALETTE_BWYR = [
       [0, 0, 0],       // 0: Black
@@ -459,9 +568,20 @@
       [255, 0, 0]      // 3: Red
     ];
 
+    // Theme definitions mapped to exact palette indices (0=Black, 1=White, 2=Yellow, 3=Red)
+    const BANNER_THEMES = {
+      w_on_k: { bg: 0, fg1: 1, fg2: 2, border: 3 }, // White/Yellow text on Black, Red accent line
+      k_on_w: { bg: 1, fg1: 0, fg2: 3, border: 0 }, // Black/Red text on White, Black accent line
+      k_on_y: { bg: 2, fg1: 0, fg2: 3, border: 0 }, // Black/Red text on Yellow, Black accent line
+      w_on_r: { bg: 3, fg1: 1, fg2: 2, border: 0 }, // White/Yellow text on Red, Black accent line
+      y_on_k: { bg: 0, fg1: 2, fg2: 1, border: 2 }  // Yellow/White text on Black, Yellow accent line
+    };
+
+    const appShell = document.getElementById("appShell");
     const connUsbBtn = document.getElementById("connUsbBtn");
     const connBleBtn = document.getElementById("connBleBtn");
     const fileInput = document.getElementById("fileInput");
+    const pasteImgBtn = document.getElementById("pasteImgBtn");
     const horizBtn = document.getElementById("horizBtn");
     const vertBtn = document.getElementById("vertBtn");
     const rotateCwBtn = document.getElementById("rotateCwBtn");
@@ -480,6 +600,12 @@
     const deckStrip = document.getElementById("deckStrip");
     const canvas = document.getElementById("preview");
     const ctx = canvas.getContext("2d");
+    const titleInput = document.getElementById("titleInput");
+    const subtitleInput = document.getElementById("subtitleInput");
+    const bannerPos = document.getElementById("bannerPos");
+    const bannerTheme = document.getElementById("bannerTheme");
+    const bannerSize = document.getElementById("bannerSize");
+    const clearTextBtn = document.getElementById("clearTextBtn");
     const zoomSlider = document.getElementById("zoomSlider");
     const zVal = document.getElementById("zVal");
     const resetZoomBtn = document.getElementById("resetZoomBtn");
@@ -501,6 +627,7 @@
     let cards = [];
     let currentIndex = -1;
     let isBusy = false;
+    let pasteCounter = 1;
 
     let uploadedMap = {};
     try {
@@ -551,7 +678,7 @@
       }
     }
 
-    // --- 2. ORIENTATION, ROTATION, SCALE, ZOOM & CENTER CONTROLS ---
+    // --- 2. ORIENTATION, ROTATION, SCALE, ZOOM, TEXT & CENTER CONTROLS ---
     function setLayoutMode(layout) {
       defaultLayout = layout;
       horizBtn.classList.toggle("active", layout === "horizontal");
@@ -656,6 +783,52 @@
       renderCurrentCard();
     });
 
+    // Text Overlay Event Listeners
+    titleInput.addEventListener("input", () => {
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      cards[currentIndex].titleText = titleInput.value;
+      markCardDirty(cards[currentIndex]);
+      renderCurrentCard();
+    });
+
+    subtitleInput.addEventListener("input", () => {
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      cards[currentIndex].subtitleText = subtitleInput.value;
+      markCardDirty(cards[currentIndex]);
+      renderCurrentCard();
+    });
+
+    bannerPos.addEventListener("change", () => {
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      cards[currentIndex].bannerPos = bannerPos.value;
+      markCardDirty(cards[currentIndex]);
+      renderCurrentCard();
+    });
+
+    bannerTheme.addEventListener("change", () => {
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      cards[currentIndex].bannerTheme = bannerTheme.value;
+      markCardDirty(cards[currentIndex]);
+      renderCurrentCard();
+    });
+
+    bannerSize.addEventListener("change", () => {
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      cards[currentIndex].bannerSize = bannerSize.value;
+      markCardDirty(cards[currentIndex]);
+      renderCurrentCard();
+    });
+
+    clearTextBtn.addEventListener("click", () => {
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      titleInput.value = "";
+      subtitleInput.value = "";
+      cards[currentIndex].titleText = "";
+      cards[currentIndex].subtitleText = "";
+      markCardDirty(cards[currentIndex]);
+      renderCurrentCard();
+    });
+
     paletteMode.addEventListener("change", () => {
       if (currentIndex < 0) return;
       cards[currentIndex].palette = paletteMode.value;
@@ -731,7 +904,6 @@
       card.panY = Math.max(-maxY, Math.min(maxY, Math.round(card.panY || 0)));
     }
 
-    // Scroll-to-zoom (Mouse wheel / trackpad pinch) anchored at cursor
     canvas.addEventListener("wheel", (e) => {
       if (currentIndex < 0 || !cards[currentIndex] || isBusy) return;
       e.preventDefault();
@@ -836,31 +1008,41 @@
     canvas.addEventListener("pointerup", finishPointer);
     canvas.addEventListener("pointercancel", finishPointer);
 
-    // --- 3. CARD DECK MANAGEMENT & NAVIGATION ---
-    fileInput.addEventListener("change", (e) => {
-      const files = Array.from(e.target.files || []);
-      if (!files.length) return;
+    // --- 3. UNIFIED IMAGE INGESTION (File Picker, Drag-and-Drop, and Cmd+V / Clipboard Paste) ---
+    function ingestImageBlobs(fileOrBlobList, sourceLabel = "Added") {
+      if (isBusy) return;
+      const validFiles = Array.from(fileOrBlobList || []).filter(
+        (f) => f && f.type && f.type.startsWith("image/")
+      );
+      if (!validFiles.length) return;
 
       let settledCount = 0;
       const startIdx = cards.length;
-      files.forEach((file) => {
+
+      validFiles.forEach((file) => {
         const img = new Image();
         const objUrl = URL.createObjectURL(file);
+        const rawName = file.name && file.name !== "image.png" && file.name !== "blob"
+          ? file.name
+          : `Pasted_Image_${pasteCounter++}.png`;
+
         const finalize = () => {
           settledCount++;
-          if (settledCount === files.length && cards.length > startIdx) {
+          if (settledCount === validFiles.length && cards.length > startIdx) {
             for (let i = startIdx; i < cards.length; i++) {
               computeCardPayload(cards[i]);
             }
             currentIndex = startIdx;
             syncControlsFromCard();
             renderCurrentCard();
+            statusEl.textContent = `${sourceLabel} ${validFiles.length} image(s)! Total in deck: ${cards.length}.`;
           }
         };
+
         img.onload = () => {
           URL.revokeObjectURL(objUrl);
           cards.push({
-            name: file.name,
+            name: rawName,
             img,
             layout: defaultLayout,
             rotCw: 0,
@@ -868,6 +1050,11 @@
             zoom: 1,
             panX: 0,
             panY: 0,
+            titleText: "",
+            subtitleText: "",
+            bannerPos: bannerPos.value,
+            bannerTheme: bannerTheme.value,
+            bannerSize: bannerSize.value,
             palette: paletteMode.value,
             brightness: 0,
             contrast: 0,
@@ -885,7 +1072,100 @@
         };
         img.src = objUrl;
       });
+    }
+
+    fileInput.addEventListener("change", (e) => {
+      ingestImageBlobs(e.target.files, "Added");
       fileInput.value = "";
+    });
+
+    let dragDepth = 0;
+    function hasImageFiles(dt) {
+      return dt && dt.types && Array.from(dt.types).includes("Files");
+    }
+
+    window.addEventListener("dragenter", (e) => {
+      if (!hasImageFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      dragDepth++;
+      appShell.classList.add("drop-active");
+    });
+
+    window.addEventListener("dragover", (e) => {
+      if (!hasImageFiles(e.dataTransfer)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+      appShell.classList.add("drop-active");
+    });
+
+    window.addEventListener("dragleave", (e) => {
+      if (!hasImageFiles(e.dataTransfer)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) {
+        appShell.classList.remove("drop-active");
+      }
+    });
+
+    window.addEventListener("drop", (e) => {
+      dragDepth = 0;
+      appShell.classList.remove("drop-active");
+      if (!e.dataTransfer) return;
+      e.preventDefault();
+
+      if (e.dataTransfer.files && e.dataTransfer.files.length) {
+        ingestImageBlobs(e.dataTransfer.files, "Dropped");
+      }
+    });
+
+    window.addEventListener("paste", (e) => {
+      if (isBusy || !e.clipboardData) return;
+      const extracted = [];
+
+      if (e.clipboardData.items) {
+        for (const item of e.clipboardData.items) {
+          if (item.type && item.type.startsWith("image/")) {
+            const blob = item.getAsFile();
+            if (blob) extracted.push(blob);
+          }
+        }
+      }
+      if (!extracted.length && e.clipboardData.files) {
+        for (const f of e.clipboardData.files) {
+          if (f.type && f.type.startsWith("image/")) extracted.push(f);
+        }
+      }
+
+      if (extracted.length) {
+        e.preventDefault();
+        ingestImageBlobs(extracted, "Pasted");
+      }
+    });
+
+    pasteImgBtn.addEventListener("click", async () => {
+      if (isBusy) return;
+      if (!navigator.clipboard || !navigator.clipboard.read) {
+        statusEl.textContent = "Press Cmd+V (Mac) or Ctrl+V (Windows) on your keyboard to paste an image.";
+        return;
+      }
+      try {
+        statusEl.textContent = "Reading clipboard (waiting for Universal Clipboard if copied from iPhone)...";
+        const clipItems = await navigator.clipboard.read();
+        const blobs = [];
+        for (const item of clipItems) {
+          const imgType = item.types.find((t) => t.startsWith("image/"));
+          if (imgType) {
+            const blob = await item.getType(imgType);
+            if (blob) blobs.push(blob);
+          }
+        }
+        if (blobs.length) {
+          ingestImageBlobs(blobs, "Pasted");
+        } else {
+          statusEl.textContent = "No image found in clipboard. Copy an image on your iPhone or Mac first, then press Cmd+V.";
+        }
+      } catch (err) {
+        statusEl.textContent = "Tip: Press Cmd+V (or Ctrl+V) on your keyboard to paste directly.";
+      }
     });
 
     function syncControlsFromCard() {
@@ -896,6 +1176,11 @@
       vertBtn.classList.toggle("active", c.layout === "vertical");
       scaleMode.value = c.scale;
       paletteMode.value = c.palette;
+      titleInput.value = c.titleText || "";
+      subtitleInput.value = c.subtitleText || "";
+      bannerPos.value = c.bannerPos || "bottom";
+      bannerTheme.value = c.bannerTheme || "w_on_k";
+      bannerSize.value = c.bannerSize || "md";
       zoomSlider.value = String(zPct);
       zVal.textContent = `${zPct}%`;
       brightnessSlider.value = String(c.brightness);
@@ -915,7 +1200,7 @@
     nextCardBtn.addEventListener("click", () => navigateCard(1));
 
     window.addEventListener("keydown", (e) => {
-      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT" || e.target.tagName === "TEXTAREA") return;
       if (e.key === "ArrowLeft") navigateCard(-1);
       if (e.key === "ArrowRight") navigateCard(1);
     });
@@ -931,10 +1216,12 @@
         cardCounter.textContent = "No images loaded";
         deviceStatusPill.style.display = "none";
         imageCardBox.classList.remove("on-device");
-        cardName.textContent = "Select one or more photos above";
+        cardName.textContent = "Drop, paste (Cmd+V), or select photos";
         removeCardBtn.style.display = "none";
         cardMeta.textContent = `${canvas.width}×${canvas.height}`;
         cardSize.textContent = "0 B";
+        titleInput.value = "";
+        subtitleInput.value = "";
         zoomSlider.value = "100";
         zVal.textContent = "100%";
         renderDeckStrip();
@@ -1003,25 +1290,164 @@
       const curCard = currentIndex >= 0 ? cards[currentIndex] : null;
       const hasCard = Boolean(curCard && curCard.packets);
       const isOffset = Boolean(curCard && (curCard.panX !== 0 || curCard.panY !== 0));
+      const hasText = Boolean(curCard && ((curCard.titleText && curCard.titleText.trim()) || (curCard.subtitleText && curCard.subtitleText.trim())));
+
       mainUploadBtn.disabled = isBusy || !hasCard;
       batchUploadBtn.disabled = isBusy || cards.length === 0;
       prevCardBtn.disabled = isBusy || cards.length <= 1;
       nextCardBtn.disabled = isBusy || cards.length <= 1;
       rotateCwBtn.disabled = isBusy || currentIndex < 0;
       centerImgBtn.disabled = isBusy || !isOffset;
+      titleInput.disabled = isBusy || currentIndex < 0;
+      subtitleInput.disabled = isBusy || currentIndex < 0;
+      bannerPos.disabled = isBusy || currentIndex < 0;
+      bannerTheme.disabled = isBusy || currentIndex < 0;
+      bannerSize.disabled = isBusy || currentIndex < 0;
+      clearTextBtn.disabled = isBusy || !hasText;
       zoomSlider.disabled = isBusy || currentIndex < 0;
       resetZoomBtn.disabled = isBusy || !curCard || (curCard.zoom || 1) === 1;
+      brightnessSlider.disabled = isBusy || currentIndex < 0;
+      contrastSlider.disabled = isBusy || currentIndex < 0;
+      resetAdjustBtn.disabled = isBusy || currentIndex < 0;
+      pasteImgBtn.disabled = isBusy;
       nextImgBtn.disabled = isBusy;
       showQrBtn.disabled = isBusy;
       clearImgsBtn.disabled = isBusy;
     }
 
-    // --- 4. CACHED DITHERING & BLANK-ROW SKIPPING PACKET BUILDER ---
+    // --- 4. CACHED DITHERING, CRISP TEXT BANNER OVERLAY & BLANK-ROW SKIPPING ---
     function isAllWhiteChunk(slice) {
       for (let i = 0; i < slice.length; i++) {
         if (slice[i] !== 0x55) return false;
       }
       return true;
+    }
+
+    function palCss(idx, mode) {
+      if (mode === "bw") {
+        return (idx === 0 || idx === 3) ? "rgb(0,0,0)" : "rgb(255,255,255)";
+      }
+      const c = PALETTE_BWYR[idx] || PALETTE_BWYR[0];
+      return `rgb(${c[0]},${c[1]},${c[2]})`;
+    }
+
+    function fitFontSize(context, text, basePx, weight, maxW) {
+      let px = basePx;
+      while (px > 10) {
+        context.font = `${weight} ${px}px system-ui, -apple-system, sans-serif`;
+        if (context.measureText(text).width <= maxW) break;
+        px -= 1;
+      }
+      return px;
+    }
+
+    // Draws crisp undithered banner & text onto ctx after the background photo is dithered
+    function drawTextBannerOverlay(context, card, cw, ch) {
+      const t1 = (card.titleText || "").trim();
+      const t2 = (card.subtitleText || "").trim();
+      if (!t1 && !t2) return;
+
+      const theme = BANNER_THEMES[card.bannerTheme] || BANNER_THEMES.w_on_k;
+      const mode = card.palette || "bwyr";
+      const bgCol = palCss(theme.bg, mode);
+      const fg1Col = palCss(theme.fg1, mode);
+      const fg2Col = mode === "bw" ? fg1Col : palCss(theme.fg2, mode);
+      const borderCol = palCss(theme.border, mode);
+
+      const szMap = {
+        sm: { title: 18, sub: 12, padY: 8, gap: 4 },
+        md: { title: 24, sub: 14, padY: 10, gap: 5 },
+        lg: { title: 32, sub: 17, padY: 12, gap: 6 }
+      };
+      const sz = szMap[card.bannerSize] || szMap.md;
+      const maxTextW = cw - 20;
+
+      context.save();
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+
+      const titlePx = t1 ? fitFontSize(context, t1, sz.title, "800", maxTextW) : 0;
+      const subPx   = t2 ? fitFontSize(context, t2, sz.sub, "700", maxTextW) : 0;
+
+      const contentH = (t1 && t2)
+        ? (titlePx + sz.gap + subPx)
+        : (t1 ? titlePx : subPx);
+      const boxH = contentH + sz.padY * 2;
+
+      const pos = card.bannerPos || "bottom";
+      let boxY = ch - boxH;
+      if (pos === "top") boxY = 0;
+      else if (pos === "center") boxY = Math.round((ch - boxH) / 2);
+
+      if (pos === "float_bottom") {
+        // Floating outlined text at bottom (no background box)
+        const baseY = ch - sz.padY - Math.round(contentH / 2);
+        const y1 = (t1 && t2) ? (baseY - Math.round((subPx + sz.gap) / 2)) : baseY;
+        const y2 = (t1 && t2) ? (baseY + Math.round((titlePx + sz.gap) / 2)) : baseY;
+
+        context.lineJoin = "round";
+        context.miterLimit = 2;
+
+        if (t1) {
+          context.font = `800 ${titlePx}px system-ui, -apple-system, sans-serif`;
+          context.strokeStyle = bgCol;
+          context.lineWidth = 5;
+          context.strokeText(t1, cw / 2, y1);
+          context.fillStyle = fg1Col;
+          context.fillText(t1, cw / 2, y1);
+        }
+        if (t2) {
+          context.font = `700 ${subPx}px system-ui, -apple-system, sans-serif`;
+          context.strokeStyle = bgCol;
+          context.lineWidth = 4;
+          context.strokeText(t2, cw / 2, y2);
+          context.fillStyle = fg2Col;
+          context.fillText(t2, cw / 2, y2);
+        }
+      } else {
+        // Solid banner bar or centered name-tag box
+        const isCenterTag = pos === "center";
+        const boxX = isCenterTag ? 10 : 0;
+        const boxW = isCenterTag ? (cw - 20) : cw;
+
+        context.fillStyle = bgCol;
+        context.fillRect(boxX, boxY, boxW, boxH);
+
+        // Crisp 3px accent border
+        context.fillStyle = borderCol;
+        if (pos === "bottom") {
+          context.fillRect(0, boxY, cw, 3);
+        } else if (pos === "top") {
+          context.fillRect(0, boxY + boxH - 3, cw, 3);
+        } else {
+          context.lineWidth = 3;
+          context.strokeStyle = borderCol;
+          context.strokeRect(boxX + 1.5, boxY + 1.5, boxW - 3, boxH - 3);
+        }
+
+        const midY = boxY + boxH / 2;
+        if (t1 && t2) {
+          const y1 = midY - (subPx + sz.gap) / 2;
+          const y2 = midY + (titlePx + sz.gap) / 2;
+          context.font = `800 ${titlePx}px system-ui, -apple-system, sans-serif`;
+          context.fillStyle = fg1Col;
+          context.fillText(t1, cw / 2, y1);
+
+          context.font = `700 ${subPx}px system-ui, -apple-system, sans-serif`;
+          context.fillStyle = fg2Col;
+          context.fillText(t2, cw / 2, y2);
+        } else if (t1) {
+          context.font = `800 ${titlePx}px system-ui, -apple-system, sans-serif`;
+          context.fillStyle = fg1Col;
+          context.fillText(t1, cw / 2, midY);
+        } else if (t2) {
+          context.font = `700 ${subPx}px system-ui, -apple-system, sans-serif`;
+          context.fillStyle = fg2Col;
+          context.fillText(t2, cw / 2, midY);
+        }
+      }
+
+      context.restore();
     }
 
     function computeCardPayload(card) {
@@ -1052,7 +1478,7 @@
       ctx.drawImage(card.img, -drawW / 2, -drawH / 2, drawW, drawH);
       ctx.restore();
 
-      const rawBytes = convertCanvasTo2BppBytes(card.palette, card.layout, card.brightness, card.contrast);
+      const rawBytes = convertCanvasTo2BppBytes(card);
       card.ditheredImageData = ctx.getImageData(0, 0, cw, ch);
       card.hash = hashBytes(rawBytes);
 
@@ -1095,7 +1521,7 @@
       cardSize.textContent = `${card.activeBytes} B non-white (${skippedPct}% white skipped)`;
 
       const onDevCount = cards.filter((c) => isCardOnDevice(c)).length;
-      statusEl.textContent = `Deck: ${onDevCount}/${cards.length} on device. Scroll or use Zoom slider (${zPct}%), then drag to frame.`;
+      statusEl.textContent = `Deck: ${onDevCount}/${cards.length} on device. Type in the Text Overlay bar to add a banner.`;
       refreshStatusIndicators();
     }
 
@@ -1115,9 +1541,15 @@
       return bestIdx;
     }
 
-    function convertCanvasTo2BppBytes(mode, layout, brightness, contrast) {
+    function convertCanvasTo2BppBytes(card) {
+      const mode = card.palette;
+      const layout = card.layout;
+      const brightness = card.brightness;
+      const contrast = card.contrast;
       const cw = canvas.width;
       const ch = canvas.height;
+
+      // Step 1: Atkinson-dither the photo background
       const imgData = ctx.getImageData(0, 0, cw, ch);
       const data = imgData.data;
       const buf = new Float32Array(cw * ch * 3);
@@ -1164,6 +1596,23 @@
       }
       ctx.putImageData(imgData, 0, 0);
 
+      // Step 2: If card has a text/name-badge overlay, draw it crisply on top and quantize without dither noise
+      if ((card.titleText && card.titleText.trim()) || (card.subtitleText && card.subtitleText.trim())) {
+        drawTextBannerOverlay(ctx, card, cw, ch);
+        const overData = ctx.getImageData(0, 0, cw, ch);
+        const od = overData.data;
+        for (let i = 0; i < cw * ch; i++) {
+          const palIdx = nearestColorIndex(od[i * 4], od[i * 4 + 1], od[i * 4 + 2], mode);
+          canvasIndices[i] = palIdx;
+          od[i * 4]     = PALETTE_BWYR[palIdx][0];
+          od[i * 4 + 1] = PALETTE_BWYR[palIdx][1];
+          od[i * 4 + 2] = PALETTE_BWYR[palIdx][2];
+          od[i * 4 + 3] = 255;
+        }
+        ctx.putImageData(overData, 0, 0);
+      }
+
+      // Step 3: Map into 400x240 hardware buffer
       let hwIndices;
       if (layout === "horizontal") {
         hwIndices = canvasIndices;
