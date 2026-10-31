@@ -274,12 +274,12 @@
         progressBar.value = 0;
         const startTime = performance.now();
 
-        // 100 bytes = exactly 1 row of 400 pixels (136 Base64 chars, fits inside 256B hardware FIFO)
-        const RAW_STEP = 100;
+        // 60 bytes is divisible by 3 (80 Base64 chars, zero padding, never overflows ESP32 RX FIFO)
+        const RAW_STEP = 60;
         for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
           const b64 = toBase64(rawPayload.subarray(offset, offset + RAW_STEP));
           await writer.write(enc.encode(`\x10u(${offset},"${b64}");\n`));
-          await new Promise((r) => setTimeout(r, 14));
+          await new Promise((r) => setTimeout(r, 18));
 
           const doneBytes = Math.min(rawPayload.byteLength, offset + RAW_STEP);
           const pct = Math.round((doneBytes / rawPayload.byteLength) * 100);
@@ -346,7 +346,7 @@
         progressBar.value = 0;
         const startTime = performance.now();
 
-        const RAW_STEP = 100;
+        const RAW_STEP = 60;
         for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
           const b64 = toBase64(rawPayload.subarray(offset, offset + RAW_STEP));
           await sendBleFast(rxChar, `\x10u(${offset},"${b64}");\n`);
