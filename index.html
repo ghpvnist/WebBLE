@@ -23,11 +23,9 @@
     canvas {
       border: 2px solid #cbd5e1;
       border-radius: 6px;
-      width: 100%;
-      max-width: 400px;
       height: auto;
       display: block;
-      margin: 16px 0;
+      margin: 16px auto;
       background: #fff;
     }
     .controls {
@@ -75,16 +73,21 @@
 </head>
 <body>
   <div class="card">
-    <h2>ePaper Badge Uploader (400×240)</h2>
+    <h2>ePaper Badge Uploader</h2>
     <div class="controls">
       <input type="file" id="fileInput" accept="image/*" />
       <select id="paletteMode">
         <option value="bwyr">4-Color (Black / White / Yellow / Red)</option>
         <option value="bw">Monochrome (Black & White only)</option>
       </select>
+      <select id="orientationMode">
+        <option value="landscape">Horizontal (400×240)</option>
+        <option value="portrait_cw">Vertical (240×400 — Rotate 90° CW)</option>
+        <option value="portrait_ccw">Vertical (240×400 — Rotate 90° CCW)</option>
+      </select>
     </div>
 
-    <canvas id="preview" width="400" height="240"></canvas>
+    <canvas id="preview" width="400" height="240" style="max-width: 400px; width: 100%;"></canvas>
 
     <div class="controls">
       <button id="usbBtn" class="usb" disabled>⚡ Upload via USB (~3s)</button>
@@ -96,8 +99,8 @@
   </div>
 
   <script>
-    const WIDTH = 400;
-    const HEIGHT = 240;
+    const HW_WIDTH = 400;
+    const HW_HEIGHT = 240;
     const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 
@@ -110,6 +113,7 @@
 
     const fileInput = document.getElementById("fileInput");
     const paletteMode = document.getElementById("paletteMode");
+    const orientationMode = document.getElementById("orientationMode");
     const canvas = document.getElementById("preview");
     const ctx = canvas.getContext("2d");
     const uploadBtn = document.getElementById("uploadBtn");
@@ -121,7 +125,7 @@
     let rawPayload = null; // Uint8Array(24000)
 
     ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     fileInput.addEventListener("change", (e) => {
       const file = e.target.files[0];
@@ -138,21 +142,34 @@
       if (loadedImg) processImage();
     });
 
-    function processImage() {
+    orientationMode.addEventListener("change", () => {
+      const isPortrait = orientationMode.value !== "landscape";
+      canvas.width = isPortrait ? 240 : 400;
+      canvas.height = isPortrait ? 400 : 240;
+      canvas.style.maxWidth = isPortrait ? "240px" : "400px";
       ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (loadedImg) processImage();
+    });
 
-      const scale = Math.min(WIDTH / loadedImg.width, HEIGHT / loadedImg.height);
+    function processImage() {
+      const cw = canvas.width;
+      const ch = canvas.height;
+
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, cw, ch);
+
+      const scale = Math.min(cw / loadedImg.width, ch / loadedImg.height);
       const w = loadedImg.width * scale;
       const h = loadedImg.height * scale;
-      const x = (WIDTH - w) / 2;
-      const y = (HEIGHT - h) / 2;
+      const x = (cw - w) / 2;
+      const y = (ch - h) / 2;
       ctx.drawImage(loadedImg, x, y, w, h);
 
-      rawPayload = convertCanvasTo2BppBytes(paletteMode.value);
+      rawPayload = convertCanvasTo2BppBytes(paletteMode.value, orientationMode.value);
       uploadBtn.disabled = false;
       usbBtn.disabled = false;
-      statusEl.textContent = `Ready! Payload size: ${rawPayload.byteLength} bytes.`;
+      statusEl.textContent = `Ready (${cw}×${ch})! Payload size: ${rawPayload.byteLength} bytes.`;
     }
 
     function nearestColorIndex(r, g, b, mode) {
@@ -176,28 +193,30 @@
       return bestIdx;
     }
 
-    function convertCanvasTo2BppBytes(mode) {
-      const imgData = ctx.getImageData(0, 0, WIDTH, HEIGHT);
+    function convertCanvasTo2BppBytes(mode, orient) {
+      const cw = canvas.width;
+      const ch = canvas.height;
+      const imgData = ctx.getImageData(0, 0, cw, ch);
       const data = imgData.data;
-      const buf = new Float32Array(WIDTH * HEIGHT * 3);
+      const buf = new Float32Array(cw * ch * 3);
 
-      for (let i = 0; i < WIDTH * HEIGHT; i++) {
+      for (let i = 0; i < cw * ch; i++) {
         buf[i * 3]     = data[i * 4];
         buf[i * 3 + 1] = data[i * 4 + 1];
         buf[i * 3 + 2] = data[i * 4 + 2];
       }
 
-      const indices = new Uint8Array(WIDTH * HEIGHT);
+      const canvasIndices = new Uint8Array(cw * ch);
 
-      for (let y = 0; y < HEIGHT; y++) {
-        for (let x = 0; x < WIDTH; x++) {
-          const idx = y * WIDTH + x;
+      for (let y = 0; y < ch; y++) {
+        for (let x = 0; x < cw; x++) {
+          const idx = y * cw + x;
           const r = Math.max(0, Math.min(255, buf[idx * 3]));
           const g = Math.max(0, Math.min(255, buf[idx * 3 + 1]));
           const b = Math.max(0, Math.min(255, buf[idx * 3 + 2]));
 
           const palIdx = nearestColorIndex(r, g, b, mode);
-          indices[idx] = palIdx;
+          canvasIndices[idx] = palIdx;
 
           const nr = PALETTE_BWYR[palIdx][0];
           const ng = PALETTE_BWYR[palIdx][1];
@@ -218,8 +237,8 @@
             [x, y + 2]
           ];
           for (const [nx, ny] of neighbors) {
-            if (nx >= 0 && nx < WIDTH && ny >= 0 && ny < HEIGHT) {
-              const nIdx = (ny * WIDTH + nx) * 3;
+            if (nx >= 0 && nx < cw && ny >= 0 && ny < ch) {
+              const nIdx = (ny * cw + nx) * 3;
               buf[nIdx]     += er;
               buf[nIdx + 1] += eg;
               buf[nIdx + 2] += eb;
@@ -229,13 +248,36 @@
       }
       ctx.putImageData(imgData, 0, 0);
 
-      const packed = new Uint8Array((WIDTH * HEIGHT) / 4);
-      for (let i = 0, bIdx = 0; i < indices.length; i += 4, bIdx++) {
+      // Map preview pixels onto the 400x240 hardware buffer
+      let hwIndices;
+      if (orient === "landscape") {
+        hwIndices = canvasIndices;
+      } else {
+        hwIndices = new Uint8Array(HW_WIDTH * HW_HEIGHT);
+        for (let hy = 0; hy < HW_HEIGHT; hy++) {
+          for (let hx = 0; hx < HW_WIDTH; hx++) {
+            let px, py;
+            if (orient === "portrait_cw") {
+              // 90° Clockwise rotation into 400x240 buffer
+              px = hy;
+              py = (HW_WIDTH - 1) - hx;
+            } else {
+              // 90° Counter-Clockwise rotation into 400x240 buffer
+              px = (HW_HEIGHT - 1) - hy;
+              py = hx;
+            }
+            hwIndices[hy * HW_WIDTH + hx] = canvasIndices[py * 240 + px];
+          }
+        }
+      }
+
+      const packed = new Uint8Array((HW_WIDTH * HW_HEIGHT) / 4);
+      for (let i = 0, bIdx = 0; i < hwIndices.length; i += 4, bIdx++) {
         packed[bIdx] =
-          ((indices[i] & 0x03) << 6) |
-          ((indices[i + 1] & 0x03) << 4) |
-          ((indices[i + 2] & 0x03) << 2) |
-          (indices[i + 3] & 0x03);
+          ((hwIndices[i] & 0x03) << 6) |
+          ((hwIndices[i + 1] & 0x03) << 4) |
+          ((hwIndices[i + 2] & 0x03) << 2) |
+          (hwIndices[i + 3] & 0x03);
       }
       return packed;
     }
@@ -248,7 +290,7 @@
       return btoa(binStr);
     }
 
-    // --- 1. WIRED USB UPLOAD (Row-aligned 100-byte chunks = zero FIFO overflow or jitter) ---
+    // --- 1. WIRED USB UPLOAD ---
     usbBtn.addEventListener("click", async () => {
       if (!navigator.serial) {
         statusEl.textContent = "Web Serial is not supported in this browser.";
@@ -305,7 +347,7 @@
       }
     });
 
-    // --- 2. BLUETOOTH UPLOAD (Pure writeValueWithoutResponse, row-aligned) ---
+    // --- 2. BLUETOOTH UPLOAD ---
     async function sendBleFast(rxChar, cmdStr) {
       const bytes = new TextEncoder().encode(cmdStr);
       const CHUNK_SZ = 60;
