@@ -3,156 +3,403 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Espruino ePaper Badge Uploader</title>
+  <title>Espruino ePaper Badge Studio</title>
   <style>
+    * { box-sizing: border-box; }
     body {
       font-family: system-ui, -apple-system, sans-serif;
-      max-width: 560px;
-      margin: 40px auto;
-      padding: 0 20px;
-      background: #f8fafc;
+      max-width: 620px;
+      margin: 32px auto;
+      padding: 0 16px;
+      background: #f1f5f9;
       color: #0f172a;
     }
-    .card {
+    .app-shell {
       background: #ffffff;
       padding: 24px;
-      border-radius: 12px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.06);
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
     }
-    h2 { margin-top: 0; }
-    h3 {
-      margin: 0 0 10px 0;
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    h2 {
+      margin: 0;
+      font-size: 20px;
+    }
+    /* Segmented toggle buttons */
+    .seg-group {
+      display: inline-flex;
+      background: #f1f5f9;
+      padding: 4px;
+      border-radius: 10px;
+      border: 1px solid #e2e8f0;
+      gap: 4px;
+    }
+    .seg-btn {
+      border: none;
+      background: transparent;
+      padding: 7px 12px;
       font-size: 13px;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
+      font-weight: 600;
+      border-radius: 7px;
       color: #475569;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .seg-btn.active {
+      background: #ffffff;
+      color: #0f172a;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    /* Toolbar */
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    button, select, .file-label {
+      padding: 8px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      border-radius: 8px;
+      border: 1px solid #cbd5e1;
+      cursor: pointer;
+      background: #ffffff;
+      color: #0f172a;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .file-label {
+      background: #eff6ff;
+      border-color: #bfdbfe;
+      color: #1d4ed8;
+    }
+    .file-label:hover { background: #dbeafe; }
+    input[type="file"] { display: none; }
+
+    /* Card Carousel View */
+    .carousel-stage {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      margin: 14px 0 10px 0;
+    }
+    .nav-arrow {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      border: 1px solid #cbd5e1;
+      background: #ffffff;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      flex-shrink: 0;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.05);
+      transition: transform 0.1s ease, background 0.15s ease;
+    }
+    .nav-arrow:hover:not(:disabled) {
+      background: #f8fafc;
+      transform: scale(1.05);
+    }
+    .image-card {
+      flex: 1;
+      background: #f8fafc;
+      border: 2px solid #e2e8f0;
+      border-radius: 14px;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 290px;
+      justify-content: space-between;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    .image-card.on-device {
+      border-color: #86efac;
+      background: #f0fdf4;
+    }
+    .card-top-bar {
+      width: 100%;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 12px;
+      font-weight: 600;
+      color: #475569;
+      margin-bottom: 10px;
+    }
+    .card-top-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .badge-pill {
+      background: #e2e8f0;
+      color: #1e293b;
+      padding: 3px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+    }
+    .device-pill {
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+      user-select: none;
+      border: 1px solid transparent;
+    }
+    .device-pill.synced {
+      background: #dcfce7;
+      color: #15803d;
+      border-color: #86efac;
+    }
+    .device-pill.pending {
+      background: #fef3c7;
+      color: #b45309;
+      border-color: #fde68a;
     }
     canvas {
-      border: 2px solid #cbd5e1;
+      border: 2px solid #94a3b8;
       border-radius: 6px;
       height: auto;
       display: block;
-      margin: 16px auto;
-      background: #fff;
+      background: #ffffff;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
     }
-    .controls {
+    .image-card.on-device canvas {
+      border-color: #22c55e;
+    }
+    .card-bottom-bar {
+      width: 100%;
       display: flex;
-      gap: 10px;
+      justify-content: space-between;
       align-items: center;
-      flex-wrap: wrap;
-      margin-top: 12px;
+      margin-top: 10px;
+      font-size: 12px;
+      color: #64748b;
     }
+
+    /* Deck Strip Pills */
+    .deck-strip {
+      display: flex;
+      gap: 6px;
+      justify-content: center;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+    .deck-dot {
+      padding: 4px 10px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 999px;
+      border: 1px solid #cbd5e1;
+      background: #f8fafc;
+      color: #475569;
+      cursor: pointer;
+    }
+    .deck-dot.active {
+      border-color: #2563eb;
+      background: #eff6ff;
+      color: #1d4ed8;
+    }
+    .deck-dot.synced {
+      border-color: #86efac;
+      background: #dcfce7;
+      color: #15803d;
+    }
+    .deck-dot.active.synced {
+      border-color: #16a34a;
+      box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.25);
+    }
+
+    /* Sliders */
     .sliders-box {
-      margin-top: 14px;
-      padding: 12px 14px;
+      padding: 10px 14px;
       background: #f8fafc;
       border: 1px solid #e2e8f0;
-      border-radius: 8px;
+      border-radius: 10px;
       display: flex;
       flex-direction: column;
-      gap: 10px;
+      gap: 8px;
+      margin-bottom: 14px;
     }
     .slider-row {
       display: flex;
       align-items: center;
       gap: 10px;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 600;
       color: #334155;
     }
     .slider-row label {
-      width: 110px;
+      width: 105px;
       flex-shrink: 0;
     }
     .slider-row input[type="range"] {
       flex: 1;
       cursor: pointer;
     }
-    .remote-box {
-      margin-top: 20px;
-      padding-top: 16px;
-      border-top: 1px solid #e2e8f0;
+    /* Action & Remote Buttons */
+    .action-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
     }
-    button, input[type="file"], select {
-      padding: 10px 14px;
+    button.primary-upload {
+      flex: 1;
+      justify-content: center;
+      padding: 12px 16px;
       font-size: 14px;
-      font-weight: 600;
-      border-radius: 8px;
-      border: 1px solid #cbd5e1;
-      cursor: pointer;
-      background: #ffffff;
-      color: #0f172a;
-    }
-    button.small {
-      padding: 6px 10px;
-      font-size: 12px;
-    }
-    button.primary {
       background: #2563eb;
-      color: white;
+      color: #ffffff;
       border: none;
+      border-radius: 10px;
     }
-    button.usb {
+    button.primary-upload:hover:not(:disabled) {
+      background: #1d4ed8;
+    }
+    button.batch-upload {
+      flex: 1;
+      justify-content: center;
+      padding: 12px 16px;
+      font-size: 14px;
       background: #059669;
-      color: white;
+      color: #ffffff;
       border: none;
+      border-radius: 10px;
+    }
+    button.batch-upload:hover:not(:disabled) {
+      background: #047857;
+    }
+    .remote-box {
+      margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid #e2e8f0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .remote-title {
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #64748b;
     }
     button.secondary {
       background: #f1f5f9;
       color: #1e293b;
-      border: 1px solid #cbd5e1;
     }
-    button.secondary:hover:not(:disabled) {
-      background: #e2e8f0;
-    }
+    button.secondary:hover:not(:disabled) { background: #e2e8f0; }
     button.danger {
       background: #fef2f2;
       color: #dc2626;
-      border: 1px solid #fecaca;
+      border-color: #fecaca;
     }
-    button.danger:hover:not(:disabled) {
-      background: #fee2e2;
-    }
+    button.danger:hover:not(:disabled) { background: #fee2e2; }
+    button.small { padding: 4px 8px; font-size: 11px; }
     button:disabled {
-      background: #94a3b8 !important;
-      color: #ffffff !important;
+      background: #cbd5e1 !important;
+      color: #64748b !important;
       border-color: transparent !important;
       cursor: not-allowed;
+      transform: none !important;
     }
     #status {
-      margin-top: 16px;
-      font-size: 14px;
-      white-space: pre-line;
+      margin-top: 12px;
+      font-size: 13px;
       color: #334155;
+      white-space: pre-line;
     }
     progress {
       width: 100%;
-      height: 12px;
+      height: 10px;
       margin-top: 10px;
       display: none;
     }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h2>ePaper Badge Uploader</h2>
-    <div class="controls">
-      <input type="file" id="fileInput" accept="image/*" />
-      <select id="paletteMode">
-        <option value="bwyr">4-Color (Black / White / Yellow / Red)</option>
-        <option value="bw">Monochrome (Black & White only)</option>
+  <div class="app-shell">
+    <!-- Top Header & Unified Connection Selector -->
+    <div class="header-row">
+      <h2>ePaper Badge Studio</h2>
+      <div class="seg-group" title="Select connection method for uploads and remote controls">
+        <button id="connUsbBtn" class="seg-btn active" type="button">⚡ USB Serial</button>
+        <button id="connBleBtn" class="seg-btn" type="button">📶 Bluetooth</button>
+      </div>
+    </div>
+
+    <!-- Image Orientation, CW Rotation, Palette & Crop Toolbar -->
+    <div class="toolbar">
+      <label class="file-label" for="fileInput">➕ Add Images</label>
+      <input type="file" id="fileInput" accept="image/*" multiple />
+
+      <div class="seg-group">
+        <button id="horizBtn" class="seg-btn" type="button">🖼️ Horizontal</button>
+        <button id="vertBtn" class="seg-btn active" type="button">📱 Vertical</button>
+      </div>
+
+      <button id="rotateCwBtn" class="secondary" type="button" title="Rotate image 90° clockwise">↻ Rotate CW</button>
+
+      <select id="scaleMode" title="Image scaling mode">
+        <option value="fit">Fit Frame</option>
+        <option value="fill">Fill (Crop)</option>
       </select>
-      <select id="orientationMode">
-        <option value="landscape">Horizontal (400×240)</option>
-        <option value="portrait_cw">Vertical (240×400 — Rotate 90° CW)</option>
-        <option value="portrait_ccw">Vertical (240×400 — Rotate 90° CCW)</option>
-      </select>
-      <select id="scaleMode">
-        <option value="fit">Fit (Show Full Image)</option>
-        <option value="fill">Fill / Cover (Crop to Fill Screen)</option>
+
+      <select id="paletteMode" title="ePaper color palette">
+        <option value="bwyr">4-Color (BWYR)</option>
+        <option value="bw">B&W Only</option>
       </select>
     </div>
 
+    <!-- Card View with Left & Right Navigation Arrows -->
+    <div class="carousel-stage">
+      <button id="prevCardBtn" class="nav-arrow" type="button" disabled title="Previous image card">◀</button>
+
+      <div id="imageCardBox" class="image-card">
+        <div class="card-top-bar">
+          <div class="card-top-left">
+            <span id="cardCounter" class="badge-pill">No images loaded</span>
+            <span id="deviceStatusPill" class="device-pill pending" style="display:none;" title="Click to manually toggle On-Device status">⏳ Not on Device</span>
+          </div>
+          <span id="cardName">Select one or more photos above</span>
+          <button id="removeCardBtn" class="danger small" type="button" style="display:none;">✕ Remove</button>
+        </div>
+
+        <canvas id="preview" width="240" height="400" style="max-width: 220px; width: 100%;"></canvas>
+
+        <div class="card-bottom-bar">
+          <span id="cardMeta">240×400 (Vertical) · CW: 0°</span>
+          <span id="cardSize">24,000 B raw</span>
+        </div>
+      </div>
+
+      <button id="nextCardBtn" class="nav-arrow" type="button" disabled title="Next image card">▶</button>
+    </div>
+
+    <!-- Deck Strip Pills (Shows all cards & which ones are on the device) -->
+    <div id="deckStrip" class="deck-strip"></div>
+
+    <!-- Fine-Tune Brightness / Contrast -->
     <div class="sliders-box">
       <div class="slider-row">
         <label for="brightnessSlider">Brightness: <span id="bVal">0</span></label>
@@ -165,28 +412,28 @@
       </div>
     </div>
 
-    <canvas id="preview" width="400" height="240" style="max-width: 400px; width: 100%;"></canvas>
-
-    <div class="controls">
-      <button id="usbBtn" class="usb" disabled>⚡ Upload via USB (~3s)</button>
-      <button id="uploadBtn" class="primary" disabled>📶 Upload via Bluetooth (~12s)</button>
+    <!-- Primary Upload Buttons -->
+    <div class="action-row">
+      <button id="mainUploadBtn" class="primary-upload" type="button" disabled>
+        🚀 Upload Card (⚡ USB)
+      </button>
+      <button id="batchUploadBtn" class="batch-upload" type="button" disabled>
+        📦 Upload All New (0)
+      </button>
     </div>
 
+    <!-- Badge Hardware Remote Controls -->
     <div class="remote-box">
-      <h3>Badge Remote Controls</h3>
-      <div class="controls">
-        <select id="remoteTransport" title="Connection method for remote commands">
-          <option value="usb">Via ⚡ USB Serial</option>
-          <option value="ble">Via 📶 Bluetooth</option>
-        </select>
-        <button id="nextImgBtn" class="secondary">⏭️ Next Image</button>
-        <button id="showQrBtn" class="secondary">📱 Show QR Screen</button>
-        <button id="clearImgsBtn" class="danger">🗑️ Clear All Images</button>
+      <span class="remote-title">Badge Remote</span>
+      <div class="toolbar" style="margin-bottom: 0;">
+        <button id="nextImgBtn" class="secondary" type="button">⏭️ Next on Badge</button>
+        <button id="showQrBtn" class="secondary" type="button">📱 Show QR</button>
+        <button id="clearImgsBtn" class="danger" type="button">🗑️ Clear All</button>
       </div>
     </div>
 
     <progress id="progressBar" value="0" max="100"></progress>
-    <div id="status">Select an image to preview and convert, or use the remote controls below.</div>
+    <div id="status">Add one or more images to preview in the card deck, or use Badge Remote controls.</div>
   </div>
 
   <script>
@@ -194,6 +441,7 @@
     const HW_HEIGHT = 240;
     const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+    const STORAGE_KEY      = "epaper_badge_uploaded_v1";
 
     const PALETTE_BWYR = [
       [0, 0, 0],       // 0: Black
@@ -202,77 +450,158 @@
       [255, 0, 0]      // 3: Red
     ];
 
+    // DOM Elements
+    const connUsbBtn = document.getElementById("connUsbBtn");
+    const connBleBtn = document.getElementById("connBleBtn");
     const fileInput = document.getElementById("fileInput");
-    const paletteMode = document.getElementById("paletteMode");
-    const orientationMode = document.getElementById("orientationMode");
+    const horizBtn = document.getElementById("horizBtn");
+    const vertBtn = document.getElementById("vertBtn");
+    const rotateCwBtn = document.getElementById("rotateCwBtn");
     const scaleMode = document.getElementById("scaleMode");
+    const paletteMode = document.getElementById("paletteMode");
+    const prevCardBtn = document.getElementById("prevCardBtn");
+    const nextCardBtn = document.getElementById("nextCardBtn");
+    const imageCardBox = document.getElementById("imageCardBox");
+    const cardCounter = document.getElementById("cardCounter");
+    const deviceStatusPill = document.getElementById("deviceStatusPill");
+    const cardName = document.getElementById("cardName");
+    const removeCardBtn = document.getElementById("removeCardBtn");
+    const cardMeta = document.getElementById("cardMeta");
+    const cardSize = document.getElementById("cardSize");
+    const deckStrip = document.getElementById("deckStrip");
+    const canvas = document.getElementById("preview");
+    const ctx = canvas.getContext("2d");
     const brightnessSlider = document.getElementById("brightnessSlider");
     const contrastSlider = document.getElementById("contrastSlider");
     const bVal = document.getElementById("bVal");
     const cVal = document.getElementById("cVal");
     const resetAdjustBtn = document.getElementById("resetAdjustBtn");
-    const canvas = document.getElementById("preview");
-    const ctx = canvas.getContext("2d");
-    const uploadBtn = document.getElementById("uploadBtn");
-    const usbBtn = document.getElementById("usbBtn");
-    const remoteTransport = document.getElementById("remoteTransport");
+    const mainUploadBtn = document.getElementById("mainUploadBtn");
+    const batchUploadBtn = document.getElementById("batchUploadBtn");
     const nextImgBtn = document.getElementById("nextImgBtn");
     const showQrBtn = document.getElementById("showQrBtn");
     const clearImgsBtn = document.getElementById("clearImgsBtn");
     const statusEl = document.getElementById("status");
     const progressBar = document.getElementById("progressBar");
 
-    let loadedImg = null;
-    let rawPayload = null; // Uint8Array(24000)
+    // App State
+    let transport = "usb"; // "usb" or "ble"
+    let defaultLayout = "vertical"; // "vertical" (240x400) or "horizontal" (400x240)
+    let cards = []; // Array of { name, img, layout, rotCw, scale, palette, brightness, contrast, compressed, hash }
+    let currentIndex = -1;
+    let isBusy = false;
+
+    // Persistent map of { [hash]: { slot, timestamp } } for images currently on the badge
+    let uploadedMap = {};
+    let nextSlotCounter = 1;
+    try {
+      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
+      if (saved && typeof saved.map === "object") {
+        uploadedMap = saved.map;
+        nextSlotCounter = saved.nextSlot || 1;
+      }
+    } catch (e) {}
+
+    function saveUploadedMap() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({
+          map: uploadedMap,
+          nextSlot: nextSlotCounter
+        }));
+      } catch (e) {}
+    }
+
+    // FNV-1a 32-bit hash of compressed payload so identical dithered images are recognized across reloads
+    function hashBytes(uint8) {
+      let h = 0x811c9dc5;
+      for (let i = 0; i < uint8.length; i++) {
+        h ^= uint8[i];
+        h = Math.imul(h, 0x01000193);
+      }
+      return (h >>> 0).toString(16).padStart(8, "0") + "_" + uint8.length;
+    }
+
+    function isCardOnDevice(card) {
+      return Boolean(card && card.hash && uploadedMap[card.hash]);
+    }
+
+    function markCardUploaded(card) {
+      if (!card || !card.hash) return;
+      if (!uploadedMap[card.hash]) {
+        uploadedMap[card.hash] = { slot: nextSlotCounter, ts: Date.now() };
+        nextSlotCounter = (nextSlotCounter % 60) + 1;
+        saveUploadedMap();
+      }
+    }
 
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-    function setButtonsBusy(busy) {
-      usbBtn.disabled = busy || !rawPayload;
-      uploadBtn.disabled = busy || !rawPayload;
-      nextImgBtn.disabled = busy;
-      showQrBtn.disabled = busy;
-      clearImgsBtn.disabled = busy;
+    // --- 1. CONNECTION MODE TOGGLE ---
+    function setTransport(mode) {
+      transport = mode;
+      connUsbBtn.classList.toggle("active", mode === "usb");
+      connBleBtn.classList.toggle("active", mode === "ble");
+      updateActionButtonsText();
+    }
+    connUsbBtn.addEventListener("click", () => setTransport("usb"));
+    connBleBtn.addEventListener("click", () => setTransport("ble"));
+
+    // --- 2. ORIENTATION & ROTATION CONTROLS ---
+    function setLayoutMode(layout) {
+      defaultLayout = layout;
+      horizBtn.classList.toggle("active", layout === "horizontal");
+      vertBtn.classList.toggle("active", layout === "vertical");
+      if (currentIndex >= 0) {
+        cards[currentIndex].layout = layout;
+        renderCurrentCard();
+      } else {
+        updateCanvasDimensions(layout);
+      }
     }
 
-    fileInput.addEventListener("change", (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-      const img = new Image();
-      img.onload = () => {
-        loadedImg = img;
-        processImage();
-      };
-      img.src = URL.createObjectURL(file);
-    });
+    function updateCanvasDimensions(layout) {
+      const isVert = layout === "vertical";
+      canvas.width = isVert ? 240 : 400;
+      canvas.height = isVert ? 400 : 240;
+      canvas.style.maxWidth = isVert ? "220px" : "380px";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
 
-    paletteMode.addEventListener("change", () => {
-      if (loadedImg) processImage();
+    horizBtn.addEventListener("click", () => setLayoutMode("horizontal"));
+    vertBtn.addEventListener("click", () => setLayoutMode("vertical"));
+
+    rotateCwBtn.addEventListener("click", () => {
+      if (currentIndex < 0) return;
+      cards[currentIndex].rotCw = (cards[currentIndex].rotCw + 90) % 360;
+      renderCurrentCard();
     });
 
     scaleMode.addEventListener("change", () => {
-      if (loadedImg) processImage();
+      if (currentIndex < 0) return;
+      cards[currentIndex].scale = scaleMode.value;
+      renderCurrentCard();
     });
 
-    orientationMode.addEventListener("change", () => {
-      const isPortrait = orientationMode.value !== "landscape";
-      canvas.width = isPortrait ? 240 : 400;
-      canvas.height = isPortrait ? 400 : 240;
-      canvas.style.maxWidth = isPortrait ? "240px" : "400px";
-      ctx.fillStyle = "#ffffff";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      if (loadedImg) processImage();
+    paletteMode.addEventListener("change", () => {
+      if (currentIndex < 0) return;
+      cards[currentIndex].palette = paletteMode.value;
+      renderCurrentCard();
     });
 
     brightnessSlider.addEventListener("input", () => {
       bVal.textContent = brightnessSlider.value;
-      if (loadedImg) processImage();
+      if (currentIndex < 0) return;
+      cards[currentIndex].brightness = parseInt(brightnessSlider.value, 10) || 0;
+      renderCurrentCard();
     });
 
     contrastSlider.addEventListener("input", () => {
       cVal.textContent = contrastSlider.value;
-      if (loadedImg) processImage();
+      if (currentIndex < 0) return;
+      cards[currentIndex].contrast = parseInt(contrastSlider.value, 10) || 0;
+      renderCurrentCard();
     });
 
     resetAdjustBtn.addEventListener("click", () => {
@@ -280,28 +609,242 @@
       contrastSlider.value = "0";
       bVal.textContent = "0";
       cVal.textContent = "0";
-      if (loadedImg) processImage();
+      if (currentIndex < 0) return;
+      cards[currentIndex].brightness = 0;
+      cards[currentIndex].contrast = 0;
+      renderCurrentCard();
     });
 
-    function processImage() {
+    // Click status pill to manually toggle On-Device status if needed
+    deviceStatusPill.addEventListener("click", () => {
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      const card = cards[currentIndex];
+      if (isCardOnDevice(card)) {
+        delete uploadedMap[card.hash];
+        saveUploadedMap();
+      } else {
+        markCardUploaded(card);
+      }
+      refreshStatusIndicators();
+    });
+
+    // --- 3. CARD DECK MANAGEMENT & NAVIGATION ---
+    fileInput.addEventListener("change", (e) => {
+      const files = Array.from(e.target.files || []);
+      if (!files.length) return;
+
+      let loadedCount = 0;
+      const startIdx = cards.length;
+      files.forEach((file) => {
+        const img = new Image();
+        img.onload = () => {
+          const newCard = {
+            name: file.name,
+            img,
+            layout: defaultLayout,
+            rotCw: 0,
+            scale: scaleMode.value,
+            palette: paletteMode.value,
+            brightness: 0,
+            contrast: 0,
+            compressed: null,
+            hash: null
+          };
+          cards.push(newCard);
+          loadedCount++;
+          if (loadedCount === files.length) {
+            // Pre-compute compression & hashes for all newly added cards so the deck strip is accurate
+            for (let i = startIdx; i < cards.length; i++) {
+              computeCardPayload(cards[i]);
+            }
+            currentIndex = startIdx;
+            syncControlsFromCard();
+            renderCurrentCard();
+          }
+        };
+        img.src = URL.createObjectURL(file);
+      });
+      fileInput.value = "";
+    });
+
+    function syncControlsFromCard() {
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      const c = cards[currentIndex];
+      horizBtn.classList.toggle("active", c.layout === "horizontal");
+      vertBtn.classList.toggle("active", c.layout === "vertical");
+      scaleMode.value = c.scale;
+      paletteMode.value = c.palette;
+      brightnessSlider.value = String(c.brightness);
+      contrastSlider.value = String(c.contrast);
+      bVal.textContent = String(c.brightness);
+      cVal.textContent = String(c.contrast);
+    }
+
+    function navigateCard(delta) {
+      if (cards.length <= 1 || isBusy) return;
+      currentIndex = (currentIndex + delta + cards.length) % cards.length;
+      syncControlsFromCard();
+      renderCurrentCard();
+    }
+
+    prevCardBtn.addEventListener("click", () => navigateCard(-1));
+    nextCardBtn.addEventListener("click", () => navigateCard(1));
+
+    window.addEventListener("keydown", (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+      if (e.key === "ArrowLeft") navigateCard(-1);
+      if (e.key === "ArrowRight") navigateCard(1);
+    });
+
+    removeCardBtn.addEventListener("click", () => {
+      if (currentIndex < 0 || isBusy) return;
+      cards.splice(currentIndex, 1);
+      if (!cards.length) {
+        currentIndex = -1;
+        updateCanvasDimensions(defaultLayout);
+        cardCounter.textContent = "No images loaded";
+        deviceStatusPill.style.display = "none";
+        imageCardBox.classList.remove("on-device");
+        cardName.textContent = "Select one or more photos above";
+        removeCardBtn.style.display = "none";
+        cardMeta.textContent = `${canvas.width}×${canvas.height}`;
+        cardSize.textContent = "0 B";
+        renderDeckStrip();
+        updateUiLock();
+      } else {
+        currentIndex = Math.min(currentIndex, cards.length - 1);
+        syncControlsFromCard();
+        renderCurrentCard();
+      }
+    });
+
+    function renderDeckStrip() {
+      deckStrip.innerHTML = "";
+      if (!cards.length) return;
+      cards.forEach((c, idx) => {
+        const onDev = isCardOnDevice(c);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "deck-dot" + (idx === currentIndex ? " active" : "") + (onDev ? " synced" : "");
+        btn.textContent = onDev ? `${idx + 1} ✓` : `${idx + 1}`;
+        btn.title = `${c.name} — ${onDev ? "Already on Badge" : "Not uploaded yet"}`;
+        btn.disabled = isBusy;
+        btn.addEventListener("click", () => {
+          if (isBusy) return;
+          currentIndex = idx;
+          syncControlsFromCard();
+          renderCurrentCard();
+        });
+        deckStrip.appendChild(btn);
+      });
+    }
+
+    function updateActionButtonsText() {
+      const via = transport === "usb" ? "⚡ USB" : "📶 BLE";
+      const curCard = currentIndex >= 0 ? cards[currentIndex] : null;
+      const curSynced = isCardOnDevice(curCard);
+
+      if (curSynced) {
+        mainUploadBtn.textContent = `🔄 Re-Upload Card (${via})`;
+      } else {
+        mainUploadBtn.textContent = `🚀 Upload Card (${via})`;
+      }
+
+      const pendingCount = cards.filter((c) => !isCardOnDevice(c)).length;
+      if (pendingCount > 0) {
+        batchUploadBtn.textContent = `📦 Upload All New (${pendingCount} via ${via})`;
+      } else if (cards.length > 0) {
+        batchUploadBtn.textContent = `✅ All ${cards.length} on Badge (Re-Upload All)`;
+      } else {
+        batchUploadBtn.textContent = `📦 Upload All New (0)`;
+      }
+    }
+
+    function refreshStatusIndicators() {
+      if (currentIndex >= 0 && cards[currentIndex]) {
+        const card = cards[currentIndex];
+        const onDev = isCardOnDevice(card);
+        deviceStatusPill.style.display = "inline-flex";
+        if (onDev) {
+          const info = uploadedMap[card.hash];
+          deviceStatusPill.className = "device-pill synced";
+          deviceStatusPill.textContent = info && info.slot
+            ? `✅ On Device (Slot #${info.slot})`
+            : `✅ On Device`;
+          imageCardBox.classList.add("on-device");
+        } else {
+          deviceStatusPill.className = "device-pill pending";
+          deviceStatusPill.textContent = "⏳ Not on Device";
+          imageCardBox.classList.remove("on-device");
+        }
+      }
+      renderDeckStrip();
+      updateActionButtonsText();
+      updateUiLock();
+    }
+
+    function updateUiLock() {
+      const hasCard = currentIndex >= 0 && cards[currentIndex] && cards[currentIndex].compressed;
+      mainUploadBtn.disabled = isBusy || !hasCard;
+      batchUploadBtn.disabled = isBusy || cards.length === 0;
+      prevCardBtn.disabled = isBusy || cards.length <= 1;
+      nextCardBtn.disabled = isBusy || cards.length <= 1;
+      rotateCwBtn.disabled = isBusy || currentIndex < 0;
+      nextImgBtn.disabled = isBusy;
+      showQrBtn.disabled = isBusy;
+      clearImgsBtn.disabled = isBusy;
+    }
+
+    // --- 4. IMAGE RENDERING, DITHERING & HEATSHRINK COMPRESSION ---
+    function computeCardPayload(card) {
+      updateCanvasDimensions(card.layout);
       const cw = canvas.width;
       const ch = canvas.height;
-
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, cw, ch);
 
-      const scale = scaleMode.value === "fill"
-        ? Math.max(cw / loadedImg.width, ch / loadedImg.height)
-        : Math.min(cw / loadedImg.width, ch / loadedImg.height);
-      const w = loadedImg.width * scale;
-      const h = loadedImg.height * scale;
-      const x = (cw - w) / 2;
-      const y = (ch - h) / 2;
-      ctx.drawImage(loadedImg, x, y, w, h);
+      const rot = card.rotCw % 360;
+      const srcW = (rot === 90 || rot === 270) ? card.img.height : card.img.width;
+      const srcH = (rot === 90 || rot === 270) ? card.img.width : card.img.height;
 
-      rawPayload = convertCanvasTo2BppBytes(paletteMode.value, orientationMode.value);
-      setButtonsBusy(false);
-      statusEl.textContent = `Ready (${cw}×${ch}, ${scaleMode.value.toUpperCase()})! Payload size: ${rawPayload.byteLength} bytes.`;
+      const scale = card.scale === "fill"
+        ? Math.max(cw / srcW, ch / srcH)
+        : Math.min(cw / srcW, ch / srcH);
+
+      const drawW = card.img.width * scale;
+      const drawH = card.img.height * scale;
+
+      ctx.save();
+      ctx.translate(cw / 2, ch / 2);
+      ctx.rotate((rot * Math.PI) / 180);
+      ctx.drawImage(card.img, -drawW / 2, -drawH / 2, drawW, drawH);
+      ctx.restore();
+
+      const rawBytes = convertCanvasTo2BppBytes(card.palette, card.layout, card.brightness, card.contrast);
+      card.compressed = heatshrinkCompress(rawBytes);
+      card.hash = hashBytes(card.compressed);
+      return rawBytes.byteLength;
+    }
+
+    function renderCurrentCard() {
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      const card = cards[currentIndex];
+      const rawLen = computeCardPayload(card);
+
+      const cw = canvas.width;
+      const ch = canvas.height;
+      const rot = card.rotCw % 360;
+      const savedPct = Math.round((1 - card.compressed.byteLength / rawLen) * 100);
+
+      cardCounter.textContent = `Card ${currentIndex + 1} of ${cards.length}`;
+      cardName.textContent = card.name.length > 22 ? card.name.slice(0, 20) + "…" : card.name;
+      removeCardBtn.style.display = "inline-flex";
+      cardMeta.textContent = `${cw}×${ch} (${card.layout === "vertical" ? "Vertical" : "Horizontal"}) · CW: ${rot}°`;
+      cardSize.textContent = `${card.compressed.byteLength} B compressed (-${savedPct}%)`;
+
+      const onDevCount = cards.filter((c) => isCardOnDevice(c)).length;
+      statusEl.textContent = `Deck: ${onDevCount}/${cards.length} already on device. Current card: ${card.compressed.byteLength} B.`;
+      refreshStatusIndicators();
     }
 
     function nearestColorIndex(r, g, b, mode) {
@@ -309,51 +852,38 @@
         const lum = 0.299 * r + 0.587 * g + 0.114 * b;
         return lum < 128 ? 0 : 1;
       }
-      let bestIdx = 1;
-      let bestDist = Infinity;
+      let bestIdx = 1, bestDist = Infinity;
       for (let i = 0; i < PALETTE_BWYR.length; i++) {
-        const pr = PALETTE_BWYR[i][0];
-        const pg = PALETTE_BWYR[i][1];
-        const pb = PALETTE_BWYR[i][2];
-        const dr = r - pr, dg = g - pg, db = b - pb;
+        const dr = r - PALETTE_BWYR[i][0];
+        const dg = g - PALETTE_BWYR[i][1];
+        const db = b - PALETTE_BWYR[i][2];
         const dist = dr * dr * 0.3 + dg * dg * 0.59 + db * db * 0.11;
-        if (dist < bestDist) {
-          bestDist = dist;
-          bestIdx = i;
-        }
+        if (dist < bestDist) { bestDist = dist; bestIdx = i; }
       }
       return bestIdx;
     }
 
-    function convertCanvasTo2BppBytes(mode, orient) {
+    function convertCanvasTo2BppBytes(mode, layout, brightness, contrast) {
       const cw = canvas.width;
       const ch = canvas.height;
       const imgData = ctx.getImageData(0, 0, cw, ch);
       const data = imgData.data;
       const buf = new Float32Array(cw * ch * 3);
-
-      const brightness = parseInt(brightnessSlider.value, 10) || 0;
-      const contrast = parseInt(contrastSlider.value, 10) || 0;
       const cFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
 
       for (let i = 0; i < cw * ch; i++) {
-        let r = data[i * 4];
-        let g = data[i * 4 + 1];
-        let b = data[i * 4 + 2];
-
+        let r = data[i * 4], g = data[i * 4 + 1], b = data[i * 4 + 2];
         if (brightness !== 0 || contrast !== 0) {
           r = cFactor * (r + brightness - 128) + 128;
           g = cFactor * (g + brightness - 128) + 128;
           b = cFactor * (b + brightness - 128) + 128;
         }
-
         buf[i * 3]     = Math.max(0, Math.min(255, r));
         buf[i * 3 + 1] = Math.max(0, Math.min(255, g));
         buf[i * 3 + 2] = Math.max(0, Math.min(255, b));
       }
 
       const canvasIndices = new Uint8Array(cw * ch);
-
       for (let y = 0; y < ch; y++) {
         for (let x = 0; x < cw; x++) {
           const idx = y * cw + x;
@@ -368,48 +898,29 @@
           const ng = PALETTE_BWYR[palIdx][1];
           const nb = PALETTE_BWYR[palIdx][2];
 
-          data[idx * 4]     = nr;
-          data[idx * 4 + 1] = ng;
-          data[idx * 4 + 2] = nb;
-          data[idx * 4 + 3] = 255;
+          data[idx * 4] = nr; data[idx * 4 + 1] = ng; data[idx * 4 + 2] = nb; data[idx * 4 + 3] = 255;
 
-          const er = (r - nr) / 8;
-          const eg = (g - ng) / 8;
-          const eb = (b - nb) / 8;
-
-          const neighbors = [
-            [x + 1, y], [x + 2, y],
-            [x - 1, y + 1], [x, y + 1], [x + 1, y + 1],
-            [x, y + 2]
-          ];
+          const er = (r - nr) / 8, eg = (g - ng) / 8, eb = (b - nb) / 8;
+          const neighbors = [[x+1,y],[x+2,y],[x-1,y+1],[x,y+1],[x+1,y+1],[x,y+2]];
           for (const [nx, ny] of neighbors) {
             if (nx >= 0 && nx < cw && ny >= 0 && ny < ch) {
               const nIdx = (ny * cw + nx) * 3;
-              buf[nIdx]     += er;
-              buf[nIdx + 1] += eg;
-              buf[nIdx + 2] += eb;
+              buf[nIdx] += er; buf[nIdx + 1] += eg; buf[nIdx + 2] += eb;
             }
           }
         }
       }
       ctx.putImageData(imgData, 0, 0);
 
-      // Map preview pixels onto the 400x240 hardware buffer
       let hwIndices;
-      if (orient === "landscape") {
+      if (layout === "horizontal") {
         hwIndices = canvasIndices;
       } else {
         hwIndices = new Uint8Array(HW_WIDTH * HW_HEIGHT);
         for (let hy = 0; hy < HW_HEIGHT; hy++) {
           for (let hx = 0; hx < HW_WIDTH; hx++) {
-            let px, py;
-            if (orient === "portrait_cw") {
-              px = hy;
-              py = (HW_WIDTH - 1) - hx;
-            } else {
-              px = (HW_HEIGHT - 1) - hy;
-              py = hx;
-            }
+            const px = hy;
+            const py = (HW_WIDTH - 1) - hx;
             hwIndices[hy * HW_WIDTH + hx] = canvasIndices[py * 240 + px];
           }
         }
@@ -426,209 +937,286 @@
       return packed;
     }
 
+    function heatshrinkCompress(input) {
+      const W_BITS = 8, L_BITS = 4;
+      const W_SIZE = 1 << W_BITS;
+      const MAX_LEN = (1 << L_BITS) + 1;
+      const out = [];
+      let curByte = 0, bitCount = 0;
+
+      function pushBits(count, val) {
+        for (let i = count - 1; i >= 0; i--) {
+          curByte = (curByte << 1) | ((val >> i) & 1);
+          if (++bitCount === 8) {
+            out.push(curByte);
+            curByte = 0;
+            bitCount = 0;
+          }
+        }
+      }
+
+      let pos = 0;
+      const len = input.length;
+      while (pos < len) {
+        let bestLen = 0, bestOff = 0;
+        const startSearch = Math.max(0, pos - W_SIZE);
+        const maxMatch = Math.min(MAX_LEN, len - pos);
+
+        if (maxMatch >= 2) {
+          const b0 = input[pos], b1 = input[pos + 1];
+          for (let i = pos - 1; i >= startSearch; i--) {
+            if (input[i] === b0 && input[i + 1] === b1) {
+              let mLen = 2;
+              while (mLen < maxMatch && input[i + mLen] === input[pos + mLen]) mLen++;
+              if (mLen > bestLen) {
+                bestLen = mLen;
+                bestOff = pos - i;
+                if (bestLen === maxMatch) break;
+              }
+            }
+          }
+        }
+
+        if (bestLen >= 2) {
+          pushBits(1, 0);
+          pushBits(W_BITS, bestOff - 1);
+          pushBits(L_BITS, bestLen - 2);
+          pos += bestLen;
+        } else {
+          pushBits(1, 1);
+          pushBits(8, input[pos]);
+          pos++;
+        }
+      }
+      if (bitCount > 0) out.push(curByte << (8 - bitCount));
+      return new Uint8Array(out);
+    }
+
     function toBase64(uint8Slice) {
       let binStr = "";
-      for (let i = 0; i < uint8Slice.length; i++) {
-        binStr += String.fromCharCode(uint8Slice[i]);
-      }
+      for (let i = 0; i < uint8Slice.length; i++) binStr += String.fromCharCode(uint8Slice[i]);
       return btoa(binStr);
     }
 
-    // --- 1. WIRED USB UPLOAD ---
-    usbBtn.addEventListener("click", async () => {
-      if (!navigator.serial) {
-        statusEl.textContent = "Web Serial is not supported in this browser.";
-        return;
-      }
-      remoteTransport.value = "usb";
-      let port = null;
-      let writer = null;
-      try {
-        setButtonsBusy(true);
-        statusEl.textContent = "Select your Badge USB Serial port...";
-
-        port = await navigator.serial.requestPort();
-        await port.open({ baudRate: 115200 });
-        writer = port.writable.getWriter();
-        const enc = new TextEncoder();
-
-        statusEl.textContent = "Initializing badge buffer over USB...";
-        await writer.write(enc.encode("\x10s();\n"));
-        await new Promise((r) => setTimeout(r, 100));
-
-        progressBar.style.display = "block";
-        progressBar.value = 0;
-        const startTime = performance.now();
-
-        const RAW_STEP = 60;
-        for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
-          const b64 = toBase64(rawPayload.subarray(offset, offset + RAW_STEP));
-          await writer.write(enc.encode(`\x10u(${offset},"${b64}");\n`));
-          await new Promise((r) => setTimeout(r, 18));
-
-          const doneBytes = Math.min(rawPayload.byteLength, offset + RAW_STEP);
-          const pct = Math.round((doneBytes / rawPayload.byteLength) * 100);
-          progressBar.value = pct;
-          statusEl.textContent = `Uploading via USB... ${pct}% (${doneBytes} / 24000 bytes)`;
-        }
-
-        statusEl.textContent = "Saving to Flash & refreshing ePaper display...";
-        await writer.write(enc.encode("\x10e();\n"));
-        await new Promise((r) => setTimeout(r, 300));
-
-        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-        statusEl.textContent = `USB Upload complete in ${elapsed}s! Saved to badge & refreshing.`;
-      } catch (err) {
-        statusEl.textContent = "USB Error: " + err.message;
-      } finally {
-        if (writer) writer.releaseLock();
-        if (port) {
-          try { await port.close(); } catch (e) {}
-        }
-        setButtonsBusy(false);
-      }
-    });
-
-    // --- 2. BLUETOOTH UPLOAD ---
-    async function sendBleFast(rxChar, cmdStr) {
+    // --- 5. SINGLE & BATCH UPLOAD ENGINE ---
+    async function sendBleAcked(rxChar, cmdStr) {
       const bytes = new TextEncoder().encode(cmdStr);
-      const CHUNK_SZ = 60;
-      for (let i = 0; i < bytes.length; i += CHUNK_SZ) {
-        const chunk = bytes.slice(i, i + CHUNK_SZ);
-        if (rxChar.writeValueWithoutResponse) {
-          await rxChar.writeValueWithoutResponse(chunk);
-        } else {
-          await rxChar.writeValue(chunk);
+      let chunkSz = 120;
+      for (let i = 0; i < bytes.length; i += chunkSz) {
+        const chunk = bytes.slice(i, i + chunkSz);
+        try {
+          if (rxChar.writeValueWithResponse) await rxChar.writeValueWithResponse(chunk);
+          else await rxChar.writeValue(chunk);
+        } catch (e) {
+          chunkSz = 20;
+          for (let j = i; j < bytes.length; j += 20) {
+            const sub = bytes.slice(j, j + 20);
+            if (rxChar.writeValueWithResponse) await rxChar.writeValueWithResponse(sub);
+            else await rxChar.writeValue(sub);
+          }
+          break;
         }
-        await new Promise((r) => setTimeout(r, 18));
       }
     }
 
-    uploadBtn.addEventListener("click", async () => {
-      if (!navigator.bluetooth || !rawPayload) return;
-      remoteTransport.value = "ble";
+    async function uploadCardList(targetCards) {
+      if (!targetCards.length) return;
+      isBusy = true;
+      updateUiLock();
+      progressBar.style.display = "block";
+      progressBar.value = 0;
+      const startTime = performance.now();
 
-      try {
-        setButtonsBusy(true);
-        statusEl.textContent = "Requesting Bluetooth device...";
-
-        const device = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
-          optionalServices: [NUS_SERVICE_UUID]
-        });
-
-        statusEl.textContent = `Connecting to ${device.name || "Badge"}...`;
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(NUS_SERVICE_UUID);
-        const rxChar = await service.getCharacteristic(NUS_RX_UUID);
-
-        statusEl.textContent = "Initializing badge buffer...";
-        await sendBleFast(rxChar, "\x10Bluetooth.setConsole();s();\n");
-        await new Promise((r) => setTimeout(r, 100));
-
-        progressBar.style.display = "block";
-        progressBar.value = 0;
-        const startTime = performance.now();
-
-        const RAW_STEP = 60;
-        for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
-          const b64 = toBase64(rawPayload.subarray(offset, offset + RAW_STEP));
-          await sendBleFast(rxChar, `\x10u(${offset},"${b64}");\n`);
-
-          const doneBytes = Math.min(rawPayload.byteLength, offset + RAW_STEP);
-          const pct = Math.round((doneBytes / rawPayload.byteLength) * 100);
-          progressBar.value = pct;
-          statusEl.textContent = `Uploading via BLE... ${pct}% (${doneBytes} / 24000 bytes)`;
-        }
-
-        statusEl.textContent = "Saving to Flash & refreshing ePaper display...";
-        await sendBleFast(rxChar, "\x10e();\n");
-
-        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-        statusEl.textContent = `BLE Upload complete in ${elapsed}s! Saved to badge & refreshing.`;
-
-        setTimeout(() => {
-          if (device.gatt.connected) device.gatt.disconnect();
-        }, 1500);
-      } catch (err) {
-        statusEl.textContent = "BLE Error: " + err.message;
-      } finally {
-        setButtonsBusy(false);
-      }
-    });
-
-    // --- 3. REMOTE CONTROL COMMAND HELPER (USB OR BLE) ---
-    async function sendRemoteAction(jsCmd, actionLabel) {
-      const mode = remoteTransport.value;
-      setButtonsBusy(true);
-
-      if (mode === "usb") {
+      if (transport === "usb") {
         if (!navigator.serial) {
           statusEl.textContent = "Web Serial is not supported in this browser.";
-          setButtonsBusy(false);
+          isBusy = false; updateUiLock();
           return;
         }
-        let port = null;
-        let writer = null;
+        let port = null, writer = null;
         try {
-          statusEl.textContent = `${actionLabel}: Select Badge USB port...`;
+          statusEl.textContent = "Select your Badge USB Serial port...";
           port = await navigator.serial.requestPort();
           await port.open({ baudRate: 115200 });
           writer = port.writable.getWriter();
           const enc = new TextEncoder();
-          await writer.write(enc.encode(`\x10${jsCmd}\n`));
-          await new Promise((r) => setTimeout(r, 250));
-          statusEl.textContent = `${actionLabel} sent via USB! Badge is updating.`;
+
+          for (let cIdx = 0; cIdx < targetCards.length; cIdx++) {
+            const card = targetCards[cIdx];
+            const payload = card.compressed;
+            const totalBytes = payload.byteLength;
+            const prefix = targetCards.length > 1 ? `[Card ${cIdx + 1}/${targetCards.length}] ` : "";
+
+            await writer.write(enc.encode(`\x10sc(${totalBytes});\n`));
+            await new Promise((r) => setTimeout(r, 80));
+
+            const RAW_STEP = 90;
+            for (let offset = 0; offset < totalBytes; offset += RAW_STEP) {
+              const b64 = toBase64(payload.subarray(offset, offset + RAW_STEP));
+              await writer.write(enc.encode(`\x10uc("${b64}");\n`));
+              await new Promise((r) => setTimeout(r, 14));
+
+              const done = Math.min(totalBytes, offset + RAW_STEP);
+              progressBar.value = Math.round(((cIdx + done / totalBytes) / targetCards.length) * 100);
+              statusEl.textContent = `${prefix}Uploading "${card.name}" via USB... ${done}/${totalBytes} B`;
+            }
+
+            await writer.write(enc.encode("\x10ec();\n"));
+            markCardUploaded(card);
+            refreshStatusIndicators();
+
+            // Wait if another card follows so Flash write & flip complete cleanly
+            if (cIdx + 1 < targetCards.length) {
+              statusEl.textContent = `${prefix}Saved! Preparing next card...`;
+              await new Promise((r) => setTimeout(r, 2600));
+            } else {
+              await new Promise((r) => setTimeout(r, 300));
+            }
+          }
+
+          const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+          statusEl.textContent = `Uploaded ${targetCards.length} card(s) via USB in ${elapsed}s! Marked ✅ On Device.`;
         } catch (err) {
-          statusEl.textContent = `USB Error: ${err.message}`;
+          statusEl.textContent = "USB Error: " + err.message;
         } finally {
           if (writer) writer.releaseLock();
-          if (port) {
-            try { await port.close(); } catch (e) {}
-          }
-          setButtonsBusy(false);
+          if (port) { try { await port.close(); } catch (e) {} }
+          isBusy = false;
+          refreshStatusIndicators();
         }
       } else {
         if (!navigator.bluetooth) {
           statusEl.textContent = "Web Bluetooth is not supported in this browser.";
-          setButtonsBusy(false);
+          isBusy = false; updateUiLock();
           return;
         }
         try {
-          statusEl.textContent = `${actionLabel}: Connecting via Bluetooth...`;
+          statusEl.textContent = "Connecting to Badge via Bluetooth...";
           const device = await navigator.bluetooth.requestDevice({
-            acceptAllDevices: true,
+            filters: [{ namePrefix: "Espruino" }],
             optionalServices: [NUS_SERVICE_UUID]
           });
           const server = await device.gatt.connect();
           const service = await server.getPrimaryService(NUS_SERVICE_UUID);
           const rxChar = await service.getCharacteristic(NUS_RX_UUID);
 
-          await sendBleFast(rxChar, `\x10Bluetooth.setConsole();${jsCmd}\n`);
-          statusEl.textContent = `${actionLabel} sent via Bluetooth! Badge is updating.`;
+          for (let cIdx = 0; cIdx < targetCards.length; cIdx++) {
+            const card = targetCards[cIdx];
+            const payload = card.compressed;
+            const totalBytes = payload.byteLength;
+            const prefix = targetCards.length > 1 ? `[Card ${cIdx + 1}/${targetCards.length}] ` : "";
+
+            await sendBleAcked(rxChar, `\x10sc(${totalBytes});\n`);
+            await new Promise((r) => setTimeout(r, 80));
+
+            const RAW_STEP = 180;
+            for (let offset = 0; offset < totalBytes; offset += RAW_STEP) {
+              const b64 = toBase64(payload.subarray(offset, offset + RAW_STEP));
+              await sendBleAcked(rxChar, `\x10uc("${b64}");\n`);
+
+              const done = Math.min(totalBytes, offset + RAW_STEP);
+              progressBar.value = Math.round(((cIdx + done / totalBytes) / targetCards.length) * 100);
+              statusEl.textContent = `${prefix}Uploading "${card.name}" via BLE... ${done}/${totalBytes} B`;
+            }
+
+            await sendBleAcked(rxChar, "\x10ec();\n");
+            markCardUploaded(card);
+            refreshStatusIndicators();
+
+            if (cIdx + 1 < targetCards.length) {
+              statusEl.textContent = `${prefix}Saved! Preparing next card...`;
+              await new Promise((r) => setTimeout(r, 2600));
+            }
+          }
+
+          const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+          statusEl.textContent = `Uploaded ${targetCards.length} card(s) via BLE in ${elapsed}s! Marked ✅ On Device.`;
 
           setTimeout(() => {
             if (device.gatt.connected) device.gatt.disconnect();
-          }, 1000);
+          }, 2000);
         } catch (err) {
-          statusEl.textContent = `BLE Error: ${err.message}`;
+          statusEl.textContent = "BLE Error: " + err.message;
         } finally {
-          setButtonsBusy(false);
+          isBusy = false;
+          refreshStatusIndicators();
         }
       }
     }
 
-    nextImgBtn.addEventListener("click", () => {
-      sendRemoteAction("nextImage();", "Next Image");
+    mainUploadBtn.addEventListener("click", () => {
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      uploadCardList([cards[currentIndex]]);
     });
 
-    showQrBtn.addEventListener("click", () => {
-      sendRemoteAction("showQRScreen();", "Show QR Screen");
+    batchUploadBtn.addEventListener("click", () => {
+      if (!cards.length) return;
+      let pending = cards.filter((c) => !isCardOnDevice(c));
+      if (!pending.length) {
+        if (!confirm("All cards in the deck are already marked as On Device. Re-upload all cards anyway?")) return;
+        pending = cards.slice();
+      }
+      uploadCardList(pending);
     });
 
+    // --- 6. BADGE REMOTE CONTROLS ---
+    async function sendRemoteAction(jsCmd, label, onSuccess) {
+      isBusy = true;
+      updateUiLock();
+
+      if (transport === "usb") {
+        let port = null, writer = null;
+        try {
+          statusEl.textContent = `${label}: Select Badge USB port...`;
+          port = await navigator.serial.requestPort();
+          await port.open({ baudRate: 115200 });
+          writer = port.writable.getWriter();
+          await writer.write(new TextEncoder().encode(`\x10${jsCmd}\n`));
+          await new Promise((r) => setTimeout(r, 250));
+          if (onSuccess) onSuccess();
+          statusEl.textContent = `${label} sent via USB!`;
+        } catch (err) {
+          statusEl.textContent = `USB Error: ${err.message}`;
+        } finally {
+          if (writer) writer.releaseLock();
+          if (port) { try { await port.close(); } catch (e) {} }
+          isBusy = false;
+          refreshStatusIndicators();
+        }
+      } else {
+        try {
+          statusEl.textContent = `${label}: Connecting via Bluetooth...`;
+          const device = await navigator.bluetooth.requestDevice({
+            filters: [{ namePrefix: "Espruino" }],
+            optionalServices: [NUS_SERVICE_UUID]
+          });
+          const server = await device.gatt.connect();
+          const service = await server.getPrimaryService(NUS_SERVICE_UUID);
+          const rxChar = await service.getCharacteristic(NUS_RX_UUID);
+          await sendBleAcked(rxChar, `\x10${jsCmd}\n`);
+          if (onSuccess) onSuccess();
+          statusEl.textContent = `${label} sent via Bluetooth!`;
+          setTimeout(() => {
+            if (device.gatt.connected) device.gatt.disconnect();
+          }, 1200);
+        } catch (err) {
+          statusEl.textContent = `BLE Error: ${err.message}`;
+        } finally {
+          isBusy = false;
+          refreshStatusIndicators();
+        }
+      }
+    }
+
+    nextImgBtn.addEventListener("click", () => sendRemoteAction("nextImage();", "Next Image"));
+    showQrBtn.addEventListener("click", () => sendRemoteAction("showQRScreen();", "Show QR Screen"));
     clearImgsBtn.addEventListener("click", () => {
       if (!confirm("Erase all saved images from the badge's Flash memory?")) return;
-      sendRemoteAction("clearImages();showQRScreen();", "Clear All Images");
+      sendRemoteAction("clearImages();showQRScreen();", "Clear All Images", () => {
+        uploadedMap = {};
+        nextSlotCounter = 1;
+        saveUploadedMap();
+      });
     });
   </script>
 </body>
