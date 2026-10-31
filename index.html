@@ -177,16 +177,29 @@
       display: block;
       background: #ffffff;
       box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      touch-action: none;
+      user-select: none;
+      cursor: grab;
+    }
+    canvas.dragging {
+      cursor: grabbing;
     }
     .image-card.on-device canvas {
       border-color: #22c55e;
+    }
+    .drag-hint {
+      font-size: 11px;
+      color: #64748b;
+      margin-top: 6px;
+      user-select: none;
+      text-align: center;
     }
     .card-bottom-bar {
       width: 100%;
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-top: 10px;
+      margin-top: 6px;
       font-size: 12px;
       color: #64748b;
     }
@@ -240,7 +253,7 @@
       color: #334155;
     }
     .slider-row label {
-      width: 105px;
+      width: 110px;
       flex-shrink: 0;
     }
     .slider-row input[type="range"] {
@@ -347,12 +360,14 @@
         <button id="vertBtn" class="seg-btn active" type="button">📱 Vertical</button>
       </div>
 
-      <button id="rotateCwBtn" class="secondary" type="button" title="Rotate image 90° clockwise">↻ Rotate CW</button>
+      <button id="rotateCwBtn" class="secondary" type="button" title="Rotate image 90° clockwise" disabled>↻ Rotate CW</button>
 
       <select id="scaleMode" title="Image scaling mode">
+        <option value="fill" selected>Fill (Crop)</option>
         <option value="fit">Fit Frame</option>
-        <option value="fill">Fill (Crop)</option>
       </select>
+
+      <button id="centerImgBtn" class="secondary" type="button" title="Snap cropped image back to center" disabled>🎯 Center</button>
 
       <select id="paletteMode" title="ePaper color palette">
         <option value="bwyr">4-Color (BWYR)</option>
@@ -373,10 +388,11 @@
           <button id="removeCardBtn" class="danger small" type="button" style="display:none;">✕ Remove</button>
         </div>
 
-        <canvas id="preview" width="240" height="400" style="max-width: 220px; width: 100%;"></canvas>
+        <canvas id="preview" width="240" height="400" style="max-width: 220px; width: 100%;" title="Scroll/pinch to zoom · Drag to adjust crop"></canvas>
+        <div id="dragHint" class="drag-hint">🔍 Scroll or pinch to zoom · ✋ Drag to frame · 🎯 Center to reset</div>
 
         <div class="card-bottom-bar">
-          <span id="cardMeta">240×400 (Vertical) · CW: 0°</span>
+          <span id="cardMeta">240×400 · 100% · Centered</span>
           <span id="cardSize">24,000 B raw</span>
         </div>
       </div>
@@ -387,6 +403,11 @@
     <div id="deckStrip" class="deck-strip"></div>
 
     <div class="sliders-box">
+      <div class="slider-row">
+        <label for="zoomSlider">Zoom: <span id="zVal">100%</span></label>
+        <input type="range" id="zoomSlider" min="100" max="400" step="5" value="100" />
+        <button id="resetZoomBtn" class="secondary small" type="button">1×</button>
+      </div>
       <div class="slider-row">
         <label for="brightnessSlider">Brightness: <span id="bVal">0</span></label>
         <input type="range" id="brightnessSlider" min="-100" max="100" value="0" />
@@ -417,17 +438,19 @@
     </div>
 
     <progress id="progressBar" value="0" max="100"></progress>
-    <div id="status">Add one or more images to preview in the card deck. Uploading overwrites the previous collection on the badge.</div>
+    <div id="status">Add one or more images to preview in the card deck. Scroll or use the Zoom slider to zoom in and drag to frame.</div>
   </div>
 
   <script>
     const HW_WIDTH = 400;
     const HW_HEIGHT = 240;
     const RAW_STEP = 60; // 60 raw bytes = 80 Base64 chars per line
+    const MIN_ZOOM = 1.0;
+    const MAX_ZOOM = 4.0;
     const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
-    const STORAGE_KEY      = "epaper_badge_uploaded_v6";
+    const STORAGE_KEY      = "epaper_badge_uploaded_v8";
 
     const PALETTE_BWYR = [
       [0, 0, 0],       // 0: Black
@@ -443,6 +466,7 @@
     const vertBtn = document.getElementById("vertBtn");
     const rotateCwBtn = document.getElementById("rotateCwBtn");
     const scaleMode = document.getElementById("scaleMode");
+    const centerImgBtn = document.getElementById("centerImgBtn");
     const paletteMode = document.getElementById("paletteMode");
     const prevCardBtn = document.getElementById("prevCardBtn");
     const nextCardBtn = document.getElementById("nextCardBtn");
@@ -456,6 +480,9 @@
     const deckStrip = document.getElementById("deckStrip");
     const canvas = document.getElementById("preview");
     const ctx = canvas.getContext("2d");
+    const zoomSlider = document.getElementById("zoomSlider");
+    const zVal = document.getElementById("zVal");
+    const resetZoomBtn = document.getElementById("resetZoomBtn");
     const brightnessSlider = document.getElementById("brightnessSlider");
     const contrastSlider = document.getElementById("contrastSlider");
     const bVal = document.getElementById("bVal");
@@ -524,13 +551,15 @@
       }
     }
 
-    // --- 2. ORIENTATION & ROTATION CONTROLS ---
+    // --- 2. ORIENTATION, ROTATION, SCALE, ZOOM & CENTER CONTROLS ---
     function setLayoutMode(layout) {
       defaultLayout = layout;
       horizBtn.classList.toggle("active", layout === "horizontal");
       vertBtn.classList.toggle("active", layout === "vertical");
       if (currentIndex >= 0) {
         cards[currentIndex].layout = layout;
+        cards[currentIndex].panX = 0;
+        cards[currentIndex].panY = 0;
         markCardDirty(cards[currentIndex]);
         renderCurrentCard();
       } else {
@@ -550,15 +579,80 @@
 
     rotateCwBtn.addEventListener("click", () => {
       if (currentIndex < 0) return;
-      cards[currentIndex].rotCw = (cards[currentIndex].rotCw + 90) % 360;
-      markCardDirty(cards[currentIndex]);
+      const card = cards[currentIndex];
+      card.rotCw = (card.rotCw + 90) % 360;
+      card.panX = 0;
+      card.panY = 0;
+      markCardDirty(card);
       renderCurrentCard();
     });
 
     scaleMode.addEventListener("change", () => {
       if (currentIndex < 0) return;
-      cards[currentIndex].scale = scaleMode.value;
-      markCardDirty(cards[currentIndex]);
+      const card = cards[currentIndex];
+      card.scale = scaleMode.value;
+      card.panX = 0;
+      card.panY = 0;
+      markCardDirty(card);
+      renderCurrentCard();
+    });
+
+    function applyZoomToCard(card, newZoom, focalRelX = 0, focalRelY = 0) {
+      const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.round(newZoom * 100) / 100));
+      const oldZoom = card.zoom || 1;
+      if (clampedZoom === oldZoom) return;
+
+      const ratio = clampedZoom / oldZoom;
+      card.panX = focalRelX - (focalRelX - (card.panX || 0)) * ratio;
+      card.panY = focalRelY - (focalRelY - (card.panY || 0)) * ratio;
+      card.zoom = clampedZoom;
+      clampCardPan(card);
+
+      const pct = Math.round(clampedZoom * 100);
+      zoomSlider.value = String(pct);
+      zVal.textContent = `${pct}%`;
+      markCardDirty(card);
+    }
+
+    zoomSlider.addEventListener("input", () => {
+      const pct = parseInt(zoomSlider.value, 10) || 100;
+      zVal.textContent = `${pct}%`;
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      applyZoomToCard(cards[currentIndex], pct / 100, 0, 0);
+      renderCurrentCard();
+    });
+
+    resetZoomBtn.addEventListener("click", () => {
+      zoomSlider.value = "100";
+      zVal.textContent = "100%";
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      const card = cards[currentIndex];
+      card.zoom = 1;
+      clampCardPan(card);
+      markCardDirty(card);
+      renderCurrentCard();
+    });
+
+    function centerCurrentCard() {
+      if (currentIndex < 0 || !cards[currentIndex] || isBusy) return;
+      const card = cards[currentIndex];
+      if (card.panX === 0 && card.panY === 0 && (card.zoom || 1) === 1) return;
+      card.panX = 0;
+      card.panY = 0;
+      markCardDirty(card);
+      renderCurrentCard();
+    }
+
+    centerImgBtn.addEventListener("click", centerCurrentCard);
+    canvas.addEventListener("dblclick", () => {
+      if (currentIndex < 0 || !cards[currentIndex] || isBusy) return;
+      const card = cards[currentIndex];
+      card.panX = 0;
+      card.panY = 0;
+      card.zoom = 1;
+      zoomSlider.value = "100";
+      zVal.textContent = "100%";
+      markCardDirty(card);
       renderCurrentCard();
     });
 
@@ -597,6 +691,151 @@
       renderCurrentCard();
     });
 
+    // --- 2B. DRAG-TO-PAN, SCROLL-TO-ZOOM & PINCH-TO-ZOOM ON PREVIEW CANVAS ---
+    const activePointers = new Map();
+    let dragState = null;
+    let pinchState = null;
+    let interactionRafPending = false;
+
+    function scheduleInteractiveRender() {
+      if (!interactionRafPending) {
+        interactionRafPending = true;
+        requestAnimationFrame(() => {
+          interactionRafPending = false;
+          renderCurrentCard();
+        });
+      }
+    }
+
+    function getCardPanLimits(card) {
+      const cw = card.layout === "vertical" ? 240 : 400;
+      const ch = card.layout === "vertical" ? 400 : 240;
+      const rot = card.rotCw % 360;
+      const srcW = (rot === 90 || rot === 270) ? card.img.height : card.img.width;
+      const srcH = (rot === 90 || rot === 270) ? card.img.width : card.img.height;
+      const baseScale = card.scale === "fill"
+        ? Math.max(cw / srcW, ch / srcH)
+        : Math.min(cw / srcW, ch / srcH);
+      const effScale = baseScale * (card.zoom || 1);
+      const visW = srcW * effScale;
+      const visH = srcH * effScale;
+      return {
+        maxX: Math.abs(visW - cw) / 2,
+        maxY: Math.abs(visH - ch) / 2
+      };
+    }
+
+    function clampCardPan(card) {
+      const { maxX, maxY } = getCardPanLimits(card);
+      card.panX = Math.max(-maxX, Math.min(maxX, Math.round(card.panX || 0)));
+      card.panY = Math.max(-maxY, Math.min(maxY, Math.round(card.panY || 0)));
+    }
+
+    // Scroll-to-zoom (Mouse wheel / trackpad pinch) anchored at cursor
+    canvas.addEventListener("wheel", (e) => {
+      if (currentIndex < 0 || !cards[currentIndex] || isBusy) return;
+      e.preventDefault();
+
+      const card = cards[currentIndex];
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+
+      const scaleX = canvas.width / rect.width;
+      const scaleY = canvas.height / rect.height;
+      const focalRelX = (e.clientX - rect.left) * scaleX - canvas.width / 2;
+      const focalRelY = (e.clientY - rect.top) * scaleY - canvas.height / 2;
+
+      const zoomFactor = Math.exp(-e.deltaY * 0.0022);
+      const nextZoom = (card.zoom || 1) * zoomFactor;
+      applyZoomToCard(card, nextZoom, focalRelX, focalRelY);
+      scheduleInteractiveRender();
+    }, { passive: false });
+
+    canvas.addEventListener("pointerdown", (e) => {
+      if (currentIndex < 0 || !cards[currentIndex] || isBusy) return;
+      const card = cards[currentIndex];
+      const rect = canvas.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+
+      canvas.setPointerCapture(e.pointerId);
+      activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+
+      if (activePointers.size === 1) {
+        canvas.classList.add("dragging");
+        pinchState = null;
+        dragState = {
+          pointerId: e.pointerId,
+          startClientX: e.clientX,
+          startClientY: e.clientY,
+          startPanX: card.panX || 0,
+          startPanY: card.panY || 0,
+          scaleX: canvas.width / rect.width,
+          scaleY: canvas.height / rect.height
+        };
+      } else if (activePointers.size === 2) {
+        dragState = null;
+        const pts = Array.from(activePointers.values());
+        const dist = Math.hypot(pts[1].clientX - pts[0].clientX, pts[1].clientY - pts[0].clientY) || 1;
+        const midX = (pts[0].clientX + pts[1].clientX) / 2;
+        const midY = (pts[0].clientY + pts[1].clientY) / 2;
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        pinchState = {
+          startDist: dist,
+          startZoom: card.zoom || 1,
+          focalRelX: (midX - rect.left) * scaleX - canvas.width / 2,
+          focalRelY: (midY - rect.top) * scaleY - canvas.height / 2
+        };
+      }
+    });
+
+    canvas.addEventListener("pointermove", (e) => {
+      if (!activePointers.has(e.pointerId)) return;
+      activePointers.set(e.pointerId, { clientX: e.clientX, clientY: e.clientY });
+      if (currentIndex < 0 || !cards[currentIndex]) return;
+      e.preventDefault();
+
+      const card = cards[currentIndex];
+
+      if (activePointers.size === 2 && pinchState) {
+        const pts = Array.from(activePointers.values());
+        const dist = Math.hypot(pts[1].clientX - pts[0].clientX, pts[1].clientY - pts[0].clientY) || 1;
+        const nextZoom = pinchState.startZoom * (dist / pinchState.startDist);
+        applyZoomToCard(card, nextZoom, pinchState.focalRelX, pinchState.focalRelY);
+        scheduleInteractiveRender();
+        return;
+      }
+
+      if (dragState && e.pointerId === dragState.pointerId) {
+        const dx = (e.clientX - dragState.startClientX) * dragState.scaleX;
+        const dy = (e.clientY - dragState.startClientY) * dragState.scaleY;
+
+        card.panX = dragState.startPanX + dx;
+        card.panY = dragState.startPanY + dy;
+        clampCardPan(card);
+        markCardDirty(card);
+        scheduleInteractiveRender();
+      }
+    });
+
+    function finishPointer(e) {
+      if (e && activePointers.has(e.pointerId)) {
+        try { canvas.releasePointerCapture(e.pointerId); } catch (err) {}
+        activePointers.delete(e.pointerId);
+      }
+      if (activePointers.size < 2) pinchState = null;
+      if (activePointers.size === 0) {
+        canvas.classList.remove("dragging");
+        dragState = null;
+        if (currentIndex >= 0 && cards[currentIndex]) {
+          renderCurrentCard();
+        }
+      }
+    }
+
+    canvas.addEventListener("pointerup", finishPointer);
+    canvas.addEventListener("pointercancel", finishPointer);
+
     // --- 3. CARD DECK MANAGEMENT & NAVIGATION ---
     fileInput.addEventListener("change", (e) => {
       const files = Array.from(e.target.files || []);
@@ -626,6 +865,9 @@
             layout: defaultLayout,
             rotCw: 0,
             scale: scaleMode.value,
+            zoom: 1,
+            panX: 0,
+            panY: 0,
             palette: paletteMode.value,
             brightness: 0,
             contrast: 0,
@@ -649,10 +891,13 @@
     function syncControlsFromCard() {
       if (currentIndex < 0 || !cards[currentIndex]) return;
       const c = cards[currentIndex];
+      const zPct = Math.round((c.zoom || 1) * 100);
       horizBtn.classList.toggle("active", c.layout === "horizontal");
       vertBtn.classList.toggle("active", c.layout === "vertical");
       scaleMode.value = c.scale;
       paletteMode.value = c.palette;
+      zoomSlider.value = String(zPct);
+      zVal.textContent = `${zPct}%`;
       brightnessSlider.value = String(c.brightness);
       contrastSlider.value = String(c.contrast);
       bVal.textContent = String(c.brightness);
@@ -690,6 +935,8 @@
         removeCardBtn.style.display = "none";
         cardMeta.textContent = `${canvas.width}×${canvas.height}`;
         cardSize.textContent = "0 B";
+        zoomSlider.value = "100";
+        zVal.textContent = "100%";
         renderDeckStrip();
         updateActionButtonsText();
         updateUiLock();
@@ -753,12 +1000,17 @@
     }
 
     function updateUiLock() {
-      const hasCard = currentIndex >= 0 && cards[currentIndex] && cards[currentIndex].packets;
+      const curCard = currentIndex >= 0 ? cards[currentIndex] : null;
+      const hasCard = Boolean(curCard && curCard.packets);
+      const isOffset = Boolean(curCard && (curCard.panX !== 0 || curCard.panY !== 0));
       mainUploadBtn.disabled = isBusy || !hasCard;
       batchUploadBtn.disabled = isBusy || cards.length === 0;
       prevCardBtn.disabled = isBusy || cards.length <= 1;
       nextCardBtn.disabled = isBusy || cards.length <= 1;
       rotateCwBtn.disabled = isBusy || currentIndex < 0;
+      centerImgBtn.disabled = isBusy || !isOffset;
+      zoomSlider.disabled = isBusy || currentIndex < 0;
+      resetZoomBtn.disabled = isBusy || !curCard || (curCard.zoom || 1) === 1;
       nextImgBtn.disabled = isBusy;
       showQrBtn.disabled = isBusy;
       clearImgsBtn.disabled = isBusy;
@@ -775,6 +1027,7 @@
     function computeCardPayload(card) {
       if (!card.dirty && card.packets && card.ditheredImageData) return;
 
+      clampCardPan(card);
       updateCanvasDimensions(card.layout);
       const cw = canvas.width;
       const ch = canvas.height;
@@ -785,15 +1038,16 @@
       const srcW = (rot === 90 || rot === 270) ? card.img.height : card.img.width;
       const srcH = (rot === 90 || rot === 270) ? card.img.width : card.img.height;
 
-      const scale = card.scale === "fill"
+      const baseScale = card.scale === "fill"
         ? Math.max(cw / srcW, ch / srcH)
         : Math.min(cw / srcW, ch / srcH);
+      const effScale = baseScale * (card.zoom || 1);
 
-      const drawW = card.img.width * scale;
-      const drawH = card.img.height * scale;
+      const drawW = card.img.width * effScale;
+      const drawH = card.img.height * effScale;
 
       ctx.save();
-      ctx.translate(cw / 2, ch / 2);
+      ctx.translate(cw / 2 + (card.panX || 0), ch / 2 + (card.panY || 0));
       ctx.rotate((rot * Math.PI) / 180);
       ctx.drawImage(card.img, -drawW / 2, -drawH / 2, drawW, drawH);
       ctx.restore();
@@ -828,16 +1082,20 @@
       const cw = canvas.width;
       const ch = canvas.height;
       const rot = card.rotCw % 360;
+      const zPct = Math.round((card.zoom || 1) * 100);
       const skippedPct = Math.round((1 - card.activeBytes / 24000) * 100);
+      const panInfo = (card.panX || card.panY)
+        ? `Pan: ${card.panX > 0 ? "+" : ""}${card.panX}, ${card.panY > 0 ? "+" : ""}${card.panY}`
+        : "Centered";
 
       cardCounter.textContent = `Card ${currentIndex + 1} of ${cards.length}`;
       cardName.textContent = card.name.length > 22 ? card.name.slice(0, 20) + "…" : card.name;
       removeCardBtn.style.display = "inline-flex";
-      cardMeta.textContent = `${cw}×${ch} (${card.layout === "vertical" ? "Vertical" : "Horizontal"}) · CW: ${rot}°`;
+      cardMeta.textContent = `${cw}×${ch} · ${zPct}% · CW: ${rot}° · ${panInfo}`;
       cardSize.textContent = `${card.activeBytes} B non-white (${skippedPct}% white skipped)`;
 
       const onDevCount = cards.filter((c) => isCardOnDevice(c)).length;
-      statusEl.textContent = `Deck: ${onDevCount}/${cards.length} on device. Uploading overwrites the previous badge collection.`;
+      statusEl.textContent = `Deck: ${onDevCount}/${cards.length} on device. Scroll or use Zoom slider (${zPct}%), then drag to frame.`;
       refreshStatusIndicators();
     }
 
@@ -943,7 +1201,6 @@
       const CHUNK_SZ = 20;
       for (let i = 0; i < bytes.length; i += CHUNK_SZ) {
         const chunk = bytes.slice(i, i + CHUNK_SZ);
-        // Use writeValue (Write With Response) so ESP32-C3 GATTS_SendRsp has a valid op_code and never errors
         if (rxChar.writeValueWithResponse) {
           await rxChar.writeValueWithResponse(chunk);
         } else {
@@ -953,7 +1210,6 @@
     }
 
     async function requestBleDevice() {
-      // acceptAllDevices: true is required so Bluefy on iOS always lists Espruino 935a
       return navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: [NUS_SERVICE_UUID]
