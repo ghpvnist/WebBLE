@@ -424,11 +424,11 @@
   <script>
     const HW_WIDTH = 400;
     const HW_HEIGHT = 240;
-    const SLICE_RAW_BYTES = 4000; // 6 slices of 4,000B = 24,000B (prevents ESP32-C3 Out-Of-Memory)
+    const RAW_STEP = 60; // 60 bytes = 80 Base64 chars (exact multiple of 3, zero padding, zero FIFO overflow)
     const MAX_BADGE_SLOTS = 25;
     const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-    const STORAGE_KEY      = "epaper_badge_uploaded_v2";
+    const STORAGE_KEY      = "epaper_badge_uploaded_v3";
 
     const PALETTE_BWYR = [
       [0, 0, 0],       // 0: Black
@@ -651,8 +651,8 @@
             palette: paletteMode.value,
             brightness: 0,
             contrast: 0,
-            slices: null,
-            totalCompressedBytes: 0,
+            packets: null,
+            activeBytes: 0,
             ditheredImageData: null,
             hash: null,
             dirty: true
@@ -787,7 +787,7 @@
     }
 
     function updateUiLock() {
-      const hasCard = currentIndex >= 0 && cards[currentIndex] && cards[currentIndex].slices;
+      const hasCard = currentIndex >= 0 && cards[currentIndex] && cards[currentIndex].packets;
       mainUploadBtn.disabled = isBusy || !hasCard;
       batchUploadBtn.disabled = isBusy || cards.length === 0;
       prevCardBtn.disabled = isBusy || cards.length <= 1;
@@ -798,9 +798,17 @@
       clearImgsBtn.disabled = isBusy;
     }
 
-    // --- 4. CACHED IMAGE RENDERING, DITHERING & SLICED HEATSHRINK COMPRESSION ---
+    // --- 4. CACHED DITHERING & BLANK-ROW SKIPPING PACKET BUILDER ---
+    function isAllWhiteChunk(slice) {
+      // 0x55 = 01010101b (4 pixels of palette index 1 = White)
+      for (let i = 0; i < slice.length; i++) {
+        if (slice[i] !== 0x55) return false;
+      }
+      return true;
+    }
+
     function computeCardPayload(card) {
-      if (!card.dirty && card.slices && card.ditheredImageData) return;
+      if (!card.dirty && card.packets && card.ditheredImageData) return;
 
       updateCanvasDimensions(card.layout);
       const cw = canvas.width;
@@ -829,16 +837,17 @@
       card.ditheredImageData = ctx.getImageData(0, 0, cw, ch);
       card.hash = hashBytes(rawBytes);
 
-      // Compress in 6 independent 4,000-byte slices so badge decompression uses <5KB RAM
-      card.slices = [];
-      let totalComp = 0;
-      for (let offset = 0; offset < rawBytes.byteLength; offset += SLICE_RAW_BYTES) {
-        const rawSlice = rawBytes.subarray(offset, offset + SLICE_RAW_BYTES);
-        const compSlice = heatshrinkCompress(rawSlice);
-        card.slices.push({ offset, data: compSlice });
-        totalComp += compSlice.byteLength;
+      // Build 60-byte packets, skipping pure-white (0x55) chunks since s() already clears buffer to white
+      card.packets = [];
+      let activeBytes = 0;
+      for (let offset = 0; offset < rawBytes.byteLength; offset += RAW_STEP) {
+        const sub = rawBytes.subarray(offset, offset + RAW_STEP);
+        if (!isAllWhiteChunk(sub)) {
+          card.packets.push({ offset, b64: toBase64(sub), len: sub.byteLength });
+          activeBytes += sub.byteLength;
+        }
       }
-      card.totalCompressedBytes = totalComp;
+      card.activeBytes = activeBytes;
       card.dirty = false;
     }
 
@@ -855,16 +864,16 @@
       const cw = canvas.width;
       const ch = canvas.height;
       const rot = card.rotCw % 360;
-      const savedPct = Math.round((1 - card.totalCompressedBytes / 24000) * 100);
+      const skippedPct = Math.round((1 - card.activeBytes / 24000) * 100);
 
       cardCounter.textContent = `Card ${currentIndex + 1} of ${cards.length}`;
       cardName.textContent = card.name.length > 22 ? card.name.slice(0, 20) + "…" : card.name;
       removeCardBtn.style.display = "inline-flex";
       cardMeta.textContent = `${cw}×${ch} (${card.layout === "vertical" ? "Vertical" : "Horizontal"}) · CW: ${rot}°`;
-      cardSize.textContent = `${card.totalCompressedBytes} B compressed (-${savedPct}%)`;
+      cardSize.textContent = `${card.activeBytes} B non-white (${skippedPct}% white skipped)`;
 
       const onDevCount = cards.filter((c) => isCardOnDevice(c)).length;
-      statusEl.textContent = `Deck: ${onDevCount}/${cards.length} on device. Current card: ${card.totalCompressedBytes} B (6 RAM-safe slices).`;
+      statusEl.textContent = `Deck: ${onDevCount}/${cards.length} on device. Current card sends ${card.packets.length}/400 chunks.`;
       refreshStatusIndicators();
     }
 
@@ -958,76 +967,21 @@
       return packed;
     }
 
-    function heatshrinkCompress(input) {
-      const W_BITS = 8, L_BITS = 4;
-      const W_SIZE = 1 << W_BITS;
-      const MAX_LEN = (1 << L_BITS) + 1;
-      const out = [];
-      let curByte = 0, bitCount = 0;
-
-      function pushBits(count, val) {
-        for (let i = count - 1; i >= 0; i--) {
-          curByte = (curByte << 1) | ((val >> i) & 1);
-          if (++bitCount === 8) {
-            out.push(curByte);
-            curByte = 0;
-            bitCount = 0;
-          }
-        }
-      }
-
-      let pos = 0;
-      const len = input.length;
-      while (pos < len) {
-        let bestLen = 0, bestOff = 0;
-        const startSearch = Math.max(0, pos - W_SIZE);
-        const maxMatch = Math.min(MAX_LEN, len - pos);
-
-        if (maxMatch >= 2) {
-          const b0 = input[pos], b1 = input[pos + 1];
-          for (let i = pos - 1; i >= startSearch; i--) {
-            if (input[i] === b0 && input[i + 1] === b1) {
-              let mLen = 2;
-              while (mLen < maxMatch && input[i + mLen] === input[pos + mLen]) mLen++;
-              if (mLen > bestLen) {
-                bestLen = mLen;
-                bestOff = pos - i;
-                if (bestLen === maxMatch) break;
-              }
-            }
-          }
-        }
-
-        if (bestLen >= 2) {
-          pushBits(1, 0);
-          pushBits(W_BITS, bestOff - 1);
-          pushBits(L_BITS, bestLen - 2);
-          pos += bestLen;
-        } else {
-          pushBits(1, 1);
-          pushBits(8, input[pos]);
-          pos++;
-        }
-      }
-      if (bitCount > 0) out.push(curByte << (8 - bitCount));
-      return new Uint8Array(out);
-    }
-
     function toBase64(uint8Slice) {
       let binStr = "";
       for (let i = 0; i < uint8Slice.length; i++) binStr += String.fromCharCode(uint8Slice[i]);
       return btoa(binStr);
     }
 
-    // --- 5. BLE 20-BYTE SAFE PACKET SENDER (Prevents opcode=16 Prepare Write & opcode=52 Drops) ---
+    // --- 5. DIRECT BUFFER UPLOAD ENGINE (USB & 20-BYTE BLE) ---
     async function sendBleSafe(rxChar, cmdStr) {
       const bytes = new TextEncoder().encode(cmdStr);
-      const CHUNK_SZ = 20; // Strict 20-byte ATT payload so OS never issues Prepare Write (opcode=0x16)
+      const CHUNK_SZ = 20;
       for (let i = 0; i < bytes.length; i += CHUNK_SZ) {
         const chunk = bytes.slice(i, i + CHUNK_SZ);
         if (rxChar.writeValueWithoutResponse) {
           await rxChar.writeValueWithoutResponse(chunk);
-          await new Promise((r) => setTimeout(r, 8));
+          await new Promise((r) => setTimeout(r, 10));
         } else {
           await rxChar.writeValue(chunk);
         }
@@ -1070,33 +1024,27 @@
           for (let cIdx = 0; cIdx < targetCards.length; cIdx++) {
             const card = targetCards[cIdx];
             computeCardPayload(card);
-            const totalBytes = card.totalCompressedBytes;
-            let sentBytes = 0;
+            const pkts = card.packets;
+            const totalPkts = Math.max(1, pkts.length);
             const prefix = targetCards.length > 1 ? `[Card ${cIdx + 1}/${targetCards.length}] ` : "";
 
-            for (const slice of card.slices) {
-              const sLen = slice.data.byteLength;
-              await writer.write(enc.encode(`\x10ss(${slice.offset},${sLen});\n`));
-              await new Promise((r) => setTimeout(r, 25));
+            await writer.write(enc.encode("\x10s();\n"));
+            await new Promise((r) => setTimeout(r, 100));
 
-              const RAW_STEP = 60;
-              for (let off = 0; off < sLen; off += RAW_STEP) {
-                const b64 = toBase64(slice.data.subarray(off, off + RAW_STEP));
-                await writer.write(enc.encode(`\x10uc("${b64}");\n`));
-                await new Promise((r) => setTimeout(r, 14));
+            for (let pIdx = 0; pIdx < pkts.length; pIdx++) {
+              const p = pkts[pIdx];
+              await writer.write(enc.encode(`\x10u(${p.offset},"${p.b64}");\n`));
+              await new Promise((r) => setTimeout(r, 16));
 
-                sentBytes += Math.min(RAW_STEP, sLen - off);
-                progressBar.value = Math.round(((cIdx + sentBytes / totalBytes) / targetCards.length) * 100);
-                statusEl.textContent = `${prefix}Uploading "${card.name}" via USB... ${sentBytes}/${totalBytes} B`;
-              }
-
-              await writer.write(enc.encode("\x10es();\n"));
-              await new Promise((r) => setTimeout(r, 35));
+              progressBar.value = Math.round(((cIdx + (pIdx + 1) / totalPkts) / targetCards.length) * 100);
+              statusEl.textContent = `${prefix}Uploading "${card.name}" via USB... chunk ${pIdx + 1}/${totalPkts}`;
             }
 
             const isLast = (cIdx + 1 === targetCards.length) ? 1 : 0;
-            await writer.write(enc.encode(`\x10ec(${isLast});\n`));
-            await new Promise((r) => setTimeout(r, isLast ? 300 : 120));
+            statusEl.textContent = `${prefix}Saving "${card.name}" to badge Flash...`;
+            await writer.write(enc.encode(`\x10e(${isLast});\n`));
+            // Give ESP32-C3 Flash time to write 24KB before starting the next card
+            await new Promise((r) => setTimeout(r, isLast ? 500 : 600));
 
             markCardUploaded(card);
             refreshStatusIndicators();
@@ -1128,32 +1076,25 @@
           for (let cIdx = 0; cIdx < targetCards.length; cIdx++) {
             const card = targetCards[cIdx];
             computeCardPayload(card);
-            const totalBytes = card.totalCompressedBytes;
-            let sentBytes = 0;
+            const pkts = card.packets;
+            const totalPkts = Math.max(1, pkts.length);
             const prefix = targetCards.length > 1 ? `[Card ${cIdx + 1}/${targetCards.length}] ` : "";
 
-            for (const slice of card.slices) {
-              const sLen = slice.data.byteLength;
-              await sendBleSafe(rxChar, `\x10ss(${slice.offset},${sLen});\n`);
-              await new Promise((r) => setTimeout(r, 35));
+            await sendBleSafe(rxChar, "\x10s();\n");
+            await new Promise((r) => setTimeout(r, 120));
 
-              const RAW_STEP = 60;
-              for (let off = 0; off < sLen; off += RAW_STEP) {
-                const b64 = toBase64(slice.data.subarray(off, off + RAW_STEP));
-                await sendBleSafe(rxChar, `\x10uc("${b64}");\n`);
+            for (let pIdx = 0; pIdx < pkts.length; pIdx++) {
+              const p = pkts[pIdx];
+              await sendBleSafe(rxChar, `\x10u(${p.offset},"${p.b64}");\n`);
 
-                sentBytes += Math.min(RAW_STEP, sLen - off);
-                progressBar.value = Math.round(((cIdx + sentBytes / totalBytes) / targetCards.length) * 100);
-                statusEl.textContent = `${prefix}Uploading "${card.name}" via BLE... ${sentBytes}/${totalBytes} B`;
-              }
-
-              await sendBleSafe(rxChar, "\x10es();\n");
-              await new Promise((r) => setTimeout(r, 45));
+              progressBar.value = Math.round(((cIdx + (pIdx + 1) / totalPkts) / targetCards.length) * 100);
+              statusEl.textContent = `${prefix}Uploading "${card.name}" via BLE... chunk ${pIdx + 1}/${totalPkts}`;
             }
 
             const isLast = (cIdx + 1 === targetCards.length) ? 1 : 0;
-            await sendBleSafe(rxChar, `\x10ec(${isLast});\n`);
-            await new Promise((r) => setTimeout(r, isLast ? 300 : 150));
+            statusEl.textContent = `${prefix}Saving "${card.name}" to badge Flash...`;
+            await sendBleSafe(rxChar, `\x10e(${isLast});\n`);
+            await new Promise((r) => setTimeout(r, isLast ? 600 : 700));
 
             markCardUploaded(card);
             refreshStatusIndicators();
@@ -1202,7 +1143,7 @@
           await port.open({ baudRate: 115200 });
           writer = port.writable.getWriter();
           await writer.write(new TextEncoder().encode(`\x10${jsCmd}\n`));
-          await new Promise((r) => setTimeout(r, 250));
+          await new Promise((r) => setTimeout(r, 300));
           if (onSuccess) onSuccess();
           statusEl.textContent = `${label} sent via USB!`;
         } catch (err) {
