@@ -400,7 +400,7 @@
 
     <div class="action-row">
       <button id="batchUploadBtn" class="batch-upload" type="button" disabled>
-        📦 Sync Deck to Badge (0 Cards · Overwrites Old)
+        📦 Upload All (0 Cards · Overwrites Old)
       </button>
       <button id="mainUploadBtn" class="primary-upload" type="button" disabled>
         ☝️ Upload This Card Only
@@ -426,7 +426,8 @@
     const RAW_STEP = 60; // 60 raw bytes = 80 Base64 chars per line
     const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-    const STORAGE_KEY      = "epaper_badge_uploaded_v4";
+    const NUS_TX_UUID      = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
+    const STORAGE_KEY      = "epaper_badge_uploaded_v5";
 
     const PALETTE_BWYR = [
       [0, 0, 0],       // 0: Black
@@ -716,8 +717,8 @@
     function updateActionButtonsText() {
       const via = transport === "usb" ? "⚡ USB" : "📶 BLE";
       batchUploadBtn.textContent = cards.length > 0
-        ? `📦 Sync All ${cards.length} Card(s) to Badge (${via} · Overwrites Old)`
-        : `📦 Sync Deck to Badge (0 Cards)`;
+        ? `📦 Upload All ${cards.length} Card(s) (${via} · Overwrites Old)`
+        : `📦 Upload All (0 Cards)`;
       mainUploadBtn.textContent = `☝️ Upload Only This Card (${via})`;
     }
 
@@ -929,7 +930,7 @@
       return btoa(binStr);
     }
 
-    // --- 5. FULL-OVERWRITE UPLOAD ENGINE (Wipes Old Badge Collection on First Card) ---
+    // --- 5. ACK-SYNCHRONIZED UPLOAD ENGINE (Waits for Badge Confirmation Before Closing) ---
     async function sendBleSafe(rxChar, cmdStr) {
       const bytes = new TextEncoder().encode(cmdStr);
       const CHUNK_SZ = 20;
@@ -955,6 +956,55 @@
       });
     }
 
+    // Helper that accumulates incoming serial/BLE text and resolves as soon as token appears
+    function createAckTracker() {
+      let buffer = "";
+      const waiters = [];
+
+      function checkWaiters() {
+        for (let i = waiters.length - 1; i >= 0; i--) {
+          const w = waiters[i];
+          const idx = buffer.indexOf(w.token);
+          if (idx !== -1) {
+            buffer = buffer.slice(idx + w.token.length);
+            waiters.splice(i, 1);
+            clearTimeout(w.timer);
+            w.resolve(true);
+          }
+        }
+      }
+
+      return {
+        feed(str) {
+          buffer += str;
+          if (buffer.length > 4096) buffer = buffer.slice(-2048);
+          checkWaiters();
+        },
+        clear() {
+          buffer = "";
+        },
+        waitFor(token, timeoutMs) {
+          const idx = buffer.indexOf(token);
+          if (idx !== -1) {
+            buffer = buffer.slice(idx + token.length);
+            return Promise.resolve(true);
+          }
+          return new Promise((resolve) => {
+            const w = {
+              token,
+              resolve,
+              timer: setTimeout(() => {
+                const pos = waiters.indexOf(w);
+                if (pos !== -1) waiters.splice(pos, 1);
+                resolve(false);
+              }, timeoutMs)
+            };
+            waiters.push(w);
+          });
+        }
+      };
+    }
+
     async function uploadCardList(targetCards) {
       if (!targetCards.length) return;
       isBusy = true;
@@ -962,6 +1012,7 @@
       progressBar.style.display = "block";
       progressBar.value = 0;
       const startTime = performance.now();
+      const ack = createAckTracker();
 
       if (transport === "usb") {
         if (!navigator.serial) {
@@ -969,13 +1020,27 @@
           isBusy = false; updateUiLock();
           return;
         }
-        let port = null, writer = null;
+        let port = null, writer = null, reader = null, readingLoop = null;
         try {
           statusEl.textContent = "Select your Badge USB Serial port...";
           port = await navigator.serial.requestPort();
           await port.open({ baudRate: 115200 });
           writer = port.writable.getWriter();
           const enc = new TextEncoder();
+          const dec = new TextDecoder();
+
+          if (port.readable) {
+            reader = port.readable.getReader();
+            readingLoop = (async () => {
+              try {
+                while (true) {
+                  const { value, done } = await reader.read();
+                  if (done) break;
+                  if (value) ack.feed(dec.decode(value, { stream: true }));
+                }
+              } catch (e) {}
+            })();
+          }
 
           for (let cIdx = 0; cIdx < targetCards.length; cIdx++) {
             const card = targetCards[cIdx];
@@ -984,32 +1049,40 @@
             const totalPkts = Math.max(1, pkts.length);
             const prefix = targetCards.length > 1 ? `[Card ${cIdx + 1}/${targetCards.length}] ` : "";
 
+            ack.clear();
             if (cIdx === 0) {
               statusEl.textContent = `${prefix}Wiping old collection & clearing badge RAM...`;
-              // s(1) erases all existing img_* files and fills RAM buffer with 0x55
               await writer.write(enc.encode("\x10s(1);\n"));
-              await new Promise((r) => setTimeout(r, 400));
+              await ack.waitFor("__S_OK__", 3500);
               uploadedMap = {};
               saveUploadedMap();
             } else {
-              // s(0) overwrites the 24,000-byte RAM buffer with 0x55 for the next card
+              statusEl.textContent = `${prefix}Clearing badge RAM for next card...`;
               await writer.write(enc.encode("\x10s(0);\n"));
-              await new Promise((r) => setTimeout(r, 120));
+              await ack.waitFor("__S_OK__", 1500);
             }
 
             for (let pIdx = 0; pIdx < pkts.length; pIdx++) {
               const p = pkts[pIdx];
               await writer.write(enc.encode(`\x10u(${p.offset},"${p.b64}");\n`));
-              await new Promise((r) => setTimeout(r, 16));
+
+              // Sync with the badge every 20 chunks so the OS serial buffer never outruns the ESP32-C3
+              if ((pIdx + 1) % 20 === 0 || pIdx + 1 === pkts.length) {
+                await writer.write(enc.encode("\x10p();\n"));
+                await ack.waitFor("__P__", 2000);
+              } else {
+                await new Promise((r) => setTimeout(r, 8));
+              }
 
               progressBar.value = Math.round(((cIdx + (pIdx + 1) / totalPkts) / targetCards.length) * 100);
               statusEl.textContent = `${prefix}Uploading "${card.name}" via USB... chunk ${pIdx + 1}/${totalPkts}`;
             }
 
             const isLast = (cIdx + 1 === targetCards.length) ? 1 : 0;
-            statusEl.textContent = `${prefix}Writing Slot #${cIdx + 1} to badge Flash...`;
+            statusEl.textContent = `${prefix}Writing Slot #${cIdx + 1} to badge Flash (waiting for Flash ACK)...`;
             await writer.write(enc.encode(`\x10e(${isLast});\n`));
-            await new Promise((r) => setTimeout(r, isLast ? 500 : 600));
+            await ack.waitFor("__E_OK:", 5000);
+            await new Promise((r) => setTimeout(r, isLast ? 400 : 150));
 
             uploadedMap[card.hash] = { slot: cIdx + 1, ts: Date.now() };
             saveUploadedMap();
@@ -1017,11 +1090,16 @@
           }
 
           const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-          statusEl.textContent = `Replaced badge collection with ${targetCards.length} card(s) via USB in ${elapsed}s!`;
+          statusEl.textContent = `Confirmed ${targetCards.length} card(s) saved to badge Flash via USB in ${elapsed}s!`;
         } catch (err) {
           statusEl.textContent = "USB Error: " + err.message;
         } finally {
-          if (writer) writer.releaseLock();
+          if (reader) {
+            try { await reader.cancel(); } catch (e) {}
+            try { reader.releaseLock(); } catch (e) {}
+          }
+          if (readingLoop) { try { await readingLoop; } catch (e) {} }
+          if (writer) { try { writer.releaseLock(); } catch (e) {} }
           if (port) { try { await port.close(); } catch (e) {} }
           isBusy = false;
           refreshStatusIndicators();
@@ -1038,6 +1116,15 @@
           const server = await device.gatt.connect();
           const service = await server.getPrimaryService(NUS_SERVICE_UUID);
           const rxChar = await service.getCharacteristic(NUS_RX_UUID);
+          const dec = new TextDecoder();
+
+          try {
+            const txChar = await service.getCharacteristic(NUS_TX_UUID);
+            await txChar.startNotifications();
+            txChar.addEventListener("characteristicvaluechanged", (ev) => {
+              ack.feed(dec.decode(ev.target.value));
+            });
+          } catch (e) {}
 
           for (let cIdx = 0; cIdx < targetCards.length; cIdx++) {
             const card = targetCards[cIdx];
@@ -1046,29 +1133,37 @@
             const totalPkts = Math.max(1, pkts.length);
             const prefix = targetCards.length > 1 ? `[Card ${cIdx + 1}/${targetCards.length}] ` : "";
 
+            ack.clear();
             if (cIdx === 0) {
               statusEl.textContent = `${prefix}Wiping old collection & clearing badge RAM...`;
               await sendBleSafe(rxChar, "\x10s(1);\n");
-              await new Promise((r) => setTimeout(r, 450));
+              await ack.waitFor("__S_OK__", 3500);
               uploadedMap = {};
               saveUploadedMap();
             } else {
+              statusEl.textContent = `${prefix}Clearing badge RAM for next card...`;
               await sendBleSafe(rxChar, "\x10s(0);\n");
-              await new Promise((r) => setTimeout(r, 150));
+              await ack.waitFor("__S_OK__", 1500);
             }
 
             for (let pIdx = 0; pIdx < pkts.length; pIdx++) {
               const p = pkts[pIdx];
               await sendBleSafe(rxChar, `\x10u(${p.offset},"${p.b64}");\n`);
 
+              if ((pIdx + 1) % 20 === 0 || pIdx + 1 === pkts.length) {
+                await sendBleSafe(rxChar, "\x10p();\n");
+                await ack.waitFor("__P__", 2500);
+              }
+
               progressBar.value = Math.round(((cIdx + (pIdx + 1) / totalPkts) / targetCards.length) * 100);
               statusEl.textContent = `${prefix}Uploading "${card.name}" via BLE... chunk ${pIdx + 1}/${totalPkts}`;
             }
 
             const isLast = (cIdx + 1 === targetCards.length) ? 1 : 0;
-            statusEl.textContent = `${prefix}Writing Slot #${cIdx + 1} to badge Flash...`;
+            statusEl.textContent = `${prefix}Writing Slot #${cIdx + 1} to badge Flash (waiting for Flash ACK)...`;
             await sendBleSafe(rxChar, `\x10e(${isLast});\n`);
-            await new Promise((r) => setTimeout(r, isLast ? 600 : 700));
+            await ack.waitFor("__E_OK:", 5000);
+            await new Promise((r) => setTimeout(r, isLast ? 500 : 200));
 
             uploadedMap[card.hash] = { slot: cIdx + 1, ts: Date.now() };
             saveUploadedMap();
@@ -1076,7 +1171,7 @@
           }
 
           const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-          statusEl.textContent = `Replaced badge collection with ${targetCards.length} card(s) via BLE in ${elapsed}s!`;
+          statusEl.textContent = `Confirmed ${targetCards.length} card(s) saved to badge Flash via BLE in ${elapsed}s!`;
 
           setTimeout(() => {
             if (device.gatt.connected) device.gatt.disconnect();
@@ -1113,7 +1208,7 @@
           await port.open({ baudRate: 115200 });
           writer = port.writable.getWriter();
           await writer.write(new TextEncoder().encode(`\x10${jsCmd}\n`));
-          await new Promise((r) => setTimeout(r, 350));
+          await new Promise((r) => setTimeout(r, 450));
           if (onSuccess) onSuccess();
           statusEl.textContent = `${label} sent via USB!`;
         } catch (err) {
