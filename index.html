@@ -157,7 +157,6 @@
       border-radius: 999px;
       font-size: 12px;
       font-weight: 700;
-      cursor: pointer;
       user-select: none;
       border: 1px solid transparent;
     }
@@ -253,21 +252,8 @@
       gap: 10px;
       flex-wrap: wrap;
     }
-    button.primary-upload {
-      flex: 1;
-      justify-content: center;
-      padding: 12px 16px;
-      font-size: 14px;
-      background: #2563eb;
-      color: #ffffff;
-      border: none;
-      border-radius: 10px;
-    }
-    button.primary-upload:hover:not(:disabled) {
-      background: #1d4ed8;
-    }
     button.batch-upload {
-      flex: 1;
+      flex: 2;
       justify-content: center;
       padding: 12px 16px;
       font-size: 14px;
@@ -278,6 +264,19 @@
     }
     button.batch-upload:hover:not(:disabled) {
       background: #047857;
+    }
+    button.primary-upload {
+      flex: 1;
+      justify-content: center;
+      padding: 12px 14px;
+      font-size: 13px;
+      background: #2563eb;
+      color: #ffffff;
+      border: none;
+      border-radius: 10px;
+    }
+    button.primary-upload:hover:not(:disabled) {
+      background: #1d4ed8;
     }
     .remote-box {
       margin-top: 16px;
@@ -368,7 +367,7 @@
         <div class="card-top-bar">
           <div class="card-top-left">
             <span id="cardCounter" class="badge-pill">No images loaded</span>
-            <span id="deviceStatusPill" class="device-pill pending" style="display:none;" title="Click to manually toggle On-Device status">⏳ Not on Device</span>
+            <span id="deviceStatusPill" class="device-pill pending" style="display:none;">⏳ Not on Device</span>
           </div>
           <span id="cardName">Select one or more photos above</span>
           <button id="removeCardBtn" class="danger small" type="button" style="display:none;">✕ Remove</button>
@@ -400,11 +399,11 @@
     </div>
 
     <div class="action-row">
-      <button id="mainUploadBtn" class="primary-upload" type="button" disabled>
-        🚀 Upload Card (⚡ USB)
-      </button>
       <button id="batchUploadBtn" class="batch-upload" type="button" disabled>
-        📦 Upload All New (0)
+        📦 Sync Deck to Badge (0 Cards · Overwrites Old)
+      </button>
+      <button id="mainUploadBtn" class="primary-upload" type="button" disabled>
+        ☝️ Upload This Card Only
       </button>
     </div>
 
@@ -418,17 +417,16 @@
     </div>
 
     <progress id="progressBar" value="0" max="100"></progress>
-    <div id="status">Add one or more images to preview in the card deck, or use Badge Remote controls.</div>
+    <div id="status">Add one or more images to preview in the card deck. Uploading overwrites the previous collection on the badge.</div>
   </div>
 
   <script>
     const HW_WIDTH = 400;
     const HW_HEIGHT = 240;
-    const RAW_STEP = 60; // 60 bytes = 80 Base64 chars (exact multiple of 3, zero padding, zero FIFO overflow)
-    const MAX_BADGE_SLOTS = 25;
+    const RAW_STEP = 60; // 60 raw bytes = 80 Base64 chars per line
     const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-    const STORAGE_KEY      = "epaper_badge_uploaded_v3";
+    const STORAGE_KEY      = "epaper_badge_uploaded_v4";
 
     const PALETTE_BWYR = [
       [0, 0, 0],       // 0: Black
@@ -477,21 +475,14 @@
     let isBusy = false;
 
     let uploadedMap = {};
-    let nextSlotCounter = 1;
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}");
-      if (saved && typeof saved.map === "object") {
-        uploadedMap = saved.map;
-        nextSlotCounter = saved.nextSlot || 1;
-      }
+      if (saved && typeof saved.map === "object") uploadedMap = saved.map;
     } catch (e) {}
 
     function saveUploadedMap() {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify({
-          map: uploadedMap,
-          nextSlot: nextSlotCounter
-        }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ map: uploadedMap }));
       } catch (e) {}
     }
 
@@ -506,15 +497,6 @@
 
     function isCardOnDevice(card) {
       return Boolean(card && card.hash && uploadedMap[card.hash]);
-    }
-
-    function markCardUploaded(card) {
-      if (!card || !card.hash) return;
-      if (!uploadedMap[card.hash]) {
-        uploadedMap[card.hash] = { slot: nextSlotCounter, ts: Date.now() };
-        nextSlotCounter = (nextSlotCounter % MAX_BADGE_SLOTS) + 1;
-        saveUploadedMap();
-      }
     }
 
     function markCardDirty(card) {
@@ -605,18 +587,6 @@
       cards[currentIndex].contrast = 0;
       markCardDirty(cards[currentIndex]);
       renderCurrentCard();
-    });
-
-    deviceStatusPill.addEventListener("click", () => {
-      if (currentIndex < 0 || !cards[currentIndex]) return;
-      const card = cards[currentIndex];
-      if (isCardOnDevice(card)) {
-        delete uploadedMap[card.hash];
-        saveUploadedMap();
-      } else {
-        markCardUploaded(card);
-      }
-      refreshStatusIndicators();
     });
 
     // --- 3. CARD DECK MANAGEMENT & NAVIGATION ---
@@ -713,6 +683,7 @@
         cardMeta.textContent = `${canvas.width}×${canvas.height}`;
         cardSize.textContent = "0 B";
         renderDeckStrip();
+        updateActionButtonsText();
         updateUiLock();
       } else {
         currentIndex = Math.min(currentIndex, cards.length - 1);
@@ -730,7 +701,7 @@
         btn.type = "button";
         btn.className = "deck-dot" + (idx === currentIndex ? " active" : "") + (onDev ? " synced" : "");
         btn.textContent = onDev ? `${idx + 1} ✓` : `${idx + 1}`;
-        btn.title = `${c.name} — ${onDev ? "Already on Badge" : "Not uploaded yet"}`;
+        btn.title = `${c.name} — ${onDev ? "Currently on Badge" : "Not on Badge"}`;
         btn.disabled = isBusy;
         btn.addEventListener("click", () => {
           if (isBusy) return;
@@ -744,23 +715,10 @@
 
     function updateActionButtonsText() {
       const via = transport === "usb" ? "⚡ USB" : "📶 BLE";
-      const curCard = currentIndex >= 0 ? cards[currentIndex] : null;
-      const curSynced = isCardOnDevice(curCard);
-
-      if (curSynced) {
-        mainUploadBtn.textContent = `🔄 Re-Upload Card (${via})`;
-      } else {
-        mainUploadBtn.textContent = `🚀 Upload Card (${via})`;
-      }
-
-      const pendingCount = cards.filter((c) => !isCardOnDevice(c)).length;
-      if (pendingCount > 0) {
-        batchUploadBtn.textContent = `📦 Upload All New (${pendingCount} via ${via})`;
-      } else if (cards.length > 0) {
-        batchUploadBtn.textContent = `✅ All ${cards.length} on Badge (Re-Upload All)`;
-      } else {
-        batchUploadBtn.textContent = `📦 Upload All New (0)`;
-      }
+      batchUploadBtn.textContent = cards.length > 0
+        ? `📦 Sync All ${cards.length} Card(s) to Badge (${via} · Overwrites Old)`
+        : `📦 Sync Deck to Badge (0 Cards)`;
+      mainUploadBtn.textContent = `☝️ Upload Only This Card (${via})`;
     }
 
     function refreshStatusIndicators() {
@@ -800,7 +758,6 @@
 
     // --- 4. CACHED DITHERING & BLANK-ROW SKIPPING PACKET BUILDER ---
     function isAllWhiteChunk(slice) {
-      // 0x55 = 01010101b (4 pixels of palette index 1 = White)
       for (let i = 0; i < slice.length; i++) {
         if (slice[i] !== 0x55) return false;
       }
@@ -837,7 +794,6 @@
       card.ditheredImageData = ctx.getImageData(0, 0, cw, ch);
       card.hash = hashBytes(rawBytes);
 
-      // Build 60-byte packets, skipping pure-white (0x55) chunks since s() already clears buffer to white
       card.packets = [];
       let activeBytes = 0;
       for (let offset = 0; offset < rawBytes.byteLength; offset += RAW_STEP) {
@@ -873,7 +829,7 @@
       cardSize.textContent = `${card.activeBytes} B non-white (${skippedPct}% white skipped)`;
 
       const onDevCount = cards.filter((c) => isCardOnDevice(c)).length;
-      statusEl.textContent = `Deck: ${onDevCount}/${cards.length} on device. Current card sends ${card.packets.length}/400 chunks.`;
+      statusEl.textContent = `Deck: ${onDevCount}/${cards.length} on device. Uploading overwrites the previous badge collection.`;
       refreshStatusIndicators();
     }
 
@@ -973,7 +929,7 @@
       return btoa(binStr);
     }
 
-    // --- 5. DIRECT BUFFER UPLOAD ENGINE (USB & 20-BYTE BLE) ---
+    // --- 5. FULL-OVERWRITE UPLOAD ENGINE (Wipes Old Badge Collection on First Card) ---
     async function sendBleSafe(rxChar, cmdStr) {
       const bytes = new TextEncoder().encode(cmdStr);
       const CHUNK_SZ = 20;
@@ -1028,8 +984,18 @@
             const totalPkts = Math.max(1, pkts.length);
             const prefix = targetCards.length > 1 ? `[Card ${cIdx + 1}/${targetCards.length}] ` : "";
 
-            await writer.write(enc.encode("\x10s();\n"));
-            await new Promise((r) => setTimeout(r, 100));
+            if (cIdx === 0) {
+              statusEl.textContent = `${prefix}Wiping old collection & clearing badge RAM...`;
+              // s(1) erases all existing img_* files and fills RAM buffer with 0x55
+              await writer.write(enc.encode("\x10s(1);\n"));
+              await new Promise((r) => setTimeout(r, 400));
+              uploadedMap = {};
+              saveUploadedMap();
+            } else {
+              // s(0) overwrites the 24,000-byte RAM buffer with 0x55 for the next card
+              await writer.write(enc.encode("\x10s(0);\n"));
+              await new Promise((r) => setTimeout(r, 120));
+            }
 
             for (let pIdx = 0; pIdx < pkts.length; pIdx++) {
               const p = pkts[pIdx];
@@ -1041,17 +1007,17 @@
             }
 
             const isLast = (cIdx + 1 === targetCards.length) ? 1 : 0;
-            statusEl.textContent = `${prefix}Saving "${card.name}" to badge Flash...`;
+            statusEl.textContent = `${prefix}Writing Slot #${cIdx + 1} to badge Flash...`;
             await writer.write(enc.encode(`\x10e(${isLast});\n`));
-            // Give ESP32-C3 Flash time to write 24KB before starting the next card
             await new Promise((r) => setTimeout(r, isLast ? 500 : 600));
 
-            markCardUploaded(card);
+            uploadedMap[card.hash] = { slot: cIdx + 1, ts: Date.now() };
+            saveUploadedMap();
             refreshStatusIndicators();
           }
 
           const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-          statusEl.textContent = `Uploaded ${targetCards.length} card(s) via USB in ${elapsed}s! Marked ✅ On Device.`;
+          statusEl.textContent = `Replaced badge collection with ${targetCards.length} card(s) via USB in ${elapsed}s!`;
         } catch (err) {
           statusEl.textContent = "USB Error: " + err.message;
         } finally {
@@ -1080,8 +1046,16 @@
             const totalPkts = Math.max(1, pkts.length);
             const prefix = targetCards.length > 1 ? `[Card ${cIdx + 1}/${targetCards.length}] ` : "";
 
-            await sendBleSafe(rxChar, "\x10s();\n");
-            await new Promise((r) => setTimeout(r, 120));
+            if (cIdx === 0) {
+              statusEl.textContent = `${prefix}Wiping old collection & clearing badge RAM...`;
+              await sendBleSafe(rxChar, "\x10s(1);\n");
+              await new Promise((r) => setTimeout(r, 450));
+              uploadedMap = {};
+              saveUploadedMap();
+            } else {
+              await sendBleSafe(rxChar, "\x10s(0);\n");
+              await new Promise((r) => setTimeout(r, 150));
+            }
 
             for (let pIdx = 0; pIdx < pkts.length; pIdx++) {
               const p = pkts[pIdx];
@@ -1092,16 +1066,17 @@
             }
 
             const isLast = (cIdx + 1 === targetCards.length) ? 1 : 0;
-            statusEl.textContent = `${prefix}Saving "${card.name}" to badge Flash...`;
+            statusEl.textContent = `${prefix}Writing Slot #${cIdx + 1} to badge Flash...`;
             await sendBleSafe(rxChar, `\x10e(${isLast});\n`);
             await new Promise((r) => setTimeout(r, isLast ? 600 : 700));
 
-            markCardUploaded(card);
+            uploadedMap[card.hash] = { slot: cIdx + 1, ts: Date.now() };
+            saveUploadedMap();
             refreshStatusIndicators();
           }
 
           const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-          statusEl.textContent = `Uploaded ${targetCards.length} card(s) via BLE in ${elapsed}s! Marked ✅ On Device.`;
+          statusEl.textContent = `Replaced badge collection with ${targetCards.length} card(s) via BLE in ${elapsed}s!`;
 
           setTimeout(() => {
             if (device.gatt.connected) device.gatt.disconnect();
@@ -1115,19 +1090,14 @@
       }
     }
 
+    batchUploadBtn.addEventListener("click", () => {
+      if (!cards.length) return;
+      uploadCardList(cards.slice());
+    });
+
     mainUploadBtn.addEventListener("click", () => {
       if (currentIndex < 0 || !cards[currentIndex]) return;
       uploadCardList([cards[currentIndex]]);
-    });
-
-    batchUploadBtn.addEventListener("click", () => {
-      if (!cards.length) return;
-      let pending = cards.filter((c) => !isCardOnDevice(c));
-      if (!pending.length) {
-        if (!confirm("All cards in the deck are already marked as On Device. Re-upload all cards anyway?")) return;
-        pending = cards.slice();
-      }
-      uploadCardList(pending);
     });
 
     // --- 6. BADGE REMOTE CONTROLS ---
@@ -1143,7 +1113,7 @@
           await port.open({ baudRate: 115200 });
           writer = port.writable.getWriter();
           await writer.write(new TextEncoder().encode(`\x10${jsCmd}\n`));
-          await new Promise((r) => setTimeout(r, 300));
+          await new Promise((r) => setTimeout(r, 350));
           if (onSuccess) onSuccess();
           statusEl.textContent = `${label} sent via USB!`;
         } catch (err) {
@@ -1182,7 +1152,6 @@
       if (!confirm("Erase all saved images from the badge's Flash memory?")) return;
       sendRemoteAction("clearImages();showQRScreen();", "Clear All Images", () => {
         uploadedMap = {};
-        nextSlotCounter = 1;
         saveUploadedMap();
       });
     });
