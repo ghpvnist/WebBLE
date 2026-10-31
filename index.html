@@ -235,6 +235,14 @@
       return packed;
     }
 
+    async function sendCommand(rxChar, cmdStr) {
+      const bytes = new TextEncoder().encode(cmdStr);
+      // 20-byte standard BLE GATT packets with writeValue (acknowledged = 0 dropped packets)
+      for (let i = 0; i < bytes.length; i += 20) {
+        await rxChar.writeValue(bytes.slice(i, i + 20));
+      }
+    }
+
     uploadBtn.addEventListener("click", async () => {
       if (!navigator.bluetooth || !rawPayload) return;
 
@@ -252,45 +260,35 @@
         const service = await server.getPrimaryService(NUS_SERVICE_UUID);
         const rxChar = await service.getCharacteristic(NUS_RX_UUID);
 
-        statusEl.textContent = "Entering high-speed binary mode...";
-        const initCmd = new TextEncoder().encode("\x10startRawUpload();\n");
-        await rxChar.writeValue(initCmd);
+        statusEl.textContent = "Initializing badge buffer...";
+        await sendCommand(rxChar, "\x10s();\n");
 
-        await new Promise((r) => setTimeout(r, 150));
-
-        let packetSize = 180;
         progressBar.style.display = "block";
         progressBar.value = 0;
         const startTime = performance.now();
 
-        for (let offset = 0; offset < rawPayload.byteLength; offset += packetSize) {
-          const chunk = rawPayload.subarray(offset, offset + packetSize);
-          try {
-            if (rxChar.writeValueWithoutResponse) {
-              await rxChar.writeValueWithoutResponse(chunk);
-            } else {
-              await rxChar.writeValue(chunk);
-            }
-          } catch (mtuErr) {
-            if (packetSize > 20) {
-              packetSize = 20;
-              offset -= 180;
-              continue;
-            }
-            throw mtuErr;
+        // Send 180 raw bytes (240 Base64 chars) per command
+        const RAW_STEP = 180;
+        for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
+          const slice = rawPayload.subarray(offset, offset + RAW_STEP);
+          let binStr = "";
+          for (let i = 0; i < slice.length; i++) {
+            binStr += String.fromCharCode(slice[i]);
           }
+          const b64 = btoa(binStr);
+          await sendCommand(rxChar, `\x10u("${b64}");\n`);
 
-          await new Promise((r) => setTimeout(r, 5));
-
-          if (offset % 1800 === 0 || offset + packetSize >= rawPayload.byteLength) {
-            const pct = Math.min(100, Math.round(((offset + packetSize) / rawPayload.byteLength) * 100));
-            progressBar.value = pct;
-            statusEl.textContent = `Streaming binary... ${pct}% (${Math.min(rawPayload.byteLength, offset + packetSize)} / 24000 B)`;
-          }
+          const doneBytes = Math.min(rawPayload.byteLength, offset + RAW_STEP);
+          const pct = Math.round((doneBytes / rawPayload.byteLength) * 100);
+          progressBar.value = pct;
+          statusEl.textContent = `Uploading... ${pct}% (${doneBytes} / 24000 bytes)`;
         }
 
+        statusEl.textContent = "Refreshing ePaper display...";
+        await sendCommand(rxChar, "\x10e();\n");
+
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-        statusEl.textContent = `Done in ${elapsed}s! Refreshing ePaper display...`;
+        statusEl.textContent = `Upload complete in ${elapsed}s! Badge is now drawing your image.`;
 
         setTimeout(() => {
           if (device.gatt.connected) device.gatt.disconnect();
