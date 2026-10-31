@@ -7,7 +7,7 @@
   <style>
     body {
       font-family: system-ui, -apple-system, sans-serif;
-      max-width: 540px;
+      max-width: 560px;
       margin: 40px auto;
       padding: 0 20px;
       background: #f8fafc;
@@ -20,6 +20,13 @@
       box-shadow: 0 4px 12px rgba(0,0,0,0.06);
     }
     h2 { margin-top: 0; }
+    h3 {
+      margin: 0 0 10px 0;
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #475569;
+    }
     canvas {
       border: 2px solid #cbd5e1;
       border-radius: 6px;
@@ -35,6 +42,37 @@
       flex-wrap: wrap;
       margin-top: 12px;
     }
+    .sliders-box {
+      margin-top: 14px;
+      padding: 12px 14px;
+      background: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #334155;
+    }
+    .slider-row label {
+      width: 110px;
+      flex-shrink: 0;
+    }
+    .slider-row input[type="range"] {
+      flex: 1;
+      cursor: pointer;
+    }
+    .remote-box {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid #e2e8f0;
+    }
     button, input[type="file"], select {
       padding: 10px 14px;
       font-size: 14px;
@@ -42,6 +80,12 @@
       border-radius: 8px;
       border: 1px solid #cbd5e1;
       cursor: pointer;
+      background: #ffffff;
+      color: #0f172a;
+    }
+    button.small {
+      padding: 6px 10px;
+      font-size: 12px;
     }
     button.primary {
       background: #2563eb;
@@ -53,8 +97,26 @@
       color: white;
       border: none;
     }
+    button.secondary {
+      background: #f1f5f9;
+      color: #1e293b;
+      border: 1px solid #cbd5e1;
+    }
+    button.secondary:hover:not(:disabled) {
+      background: #e2e8f0;
+    }
+    button.danger {
+      background: #fef2f2;
+      color: #dc2626;
+      border: 1px solid #fecaca;
+    }
+    button.danger:hover:not(:disabled) {
+      background: #fee2e2;
+    }
     button:disabled {
       background: #94a3b8 !important;
+      color: #ffffff !important;
+      border-color: transparent !important;
       cursor: not-allowed;
     }
     #status {
@@ -85,6 +147,22 @@
         <option value="portrait_cw">Vertical (240×400 — Rotate 90° CW)</option>
         <option value="portrait_ccw">Vertical (240×400 — Rotate 90° CCW)</option>
       </select>
+      <select id="scaleMode">
+        <option value="fit">Fit (Show Full Image)</option>
+        <option value="fill">Fill / Cover (Crop to Fill Screen)</option>
+      </select>
+    </div>
+
+    <div class="sliders-box">
+      <div class="slider-row">
+        <label for="brightnessSlider">Brightness: <span id="bVal">0</span></label>
+        <input type="range" id="brightnessSlider" min="-100" max="100" value="0" />
+      </div>
+      <div class="slider-row">
+        <label for="contrastSlider">Contrast: <span id="cVal">0</span></label>
+        <input type="range" id="contrastSlider" min="-100" max="100" value="0" />
+        <button id="resetAdjustBtn" class="secondary small" type="button">Reset</button>
+      </div>
     </div>
 
     <canvas id="preview" width="400" height="240" style="max-width: 400px; width: 100%;"></canvas>
@@ -94,8 +172,21 @@
       <button id="uploadBtn" class="primary" disabled>📶 Upload via Bluetooth (~12s)</button>
     </div>
 
+    <div class="remote-box">
+      <h3>Badge Remote Controls</h3>
+      <div class="controls">
+        <select id="remoteTransport" title="Connection method for remote commands">
+          <option value="usb">Via ⚡ USB Serial</option>
+          <option value="ble">Via 📶 Bluetooth</option>
+        </select>
+        <button id="nextImgBtn" class="secondary">⏭️ Next Image</button>
+        <button id="showQrBtn" class="secondary">📱 Show QR Screen</button>
+        <button id="clearImgsBtn" class="danger">🗑️ Clear All Images</button>
+      </div>
+    </div>
+
     <progress id="progressBar" value="0" max="100"></progress>
-    <div id="status">Select an image to preview and convert.</div>
+    <div id="status">Select an image to preview and convert, or use the remote controls below.</div>
   </div>
 
   <script>
@@ -114,10 +205,20 @@
     const fileInput = document.getElementById("fileInput");
     const paletteMode = document.getElementById("paletteMode");
     const orientationMode = document.getElementById("orientationMode");
+    const scaleMode = document.getElementById("scaleMode");
+    const brightnessSlider = document.getElementById("brightnessSlider");
+    const contrastSlider = document.getElementById("contrastSlider");
+    const bVal = document.getElementById("bVal");
+    const cVal = document.getElementById("cVal");
+    const resetAdjustBtn = document.getElementById("resetAdjustBtn");
     const canvas = document.getElementById("preview");
     const ctx = canvas.getContext("2d");
     const uploadBtn = document.getElementById("uploadBtn");
     const usbBtn = document.getElementById("usbBtn");
+    const remoteTransport = document.getElementById("remoteTransport");
+    const nextImgBtn = document.getElementById("nextImgBtn");
+    const showQrBtn = document.getElementById("showQrBtn");
+    const clearImgsBtn = document.getElementById("clearImgsBtn");
     const statusEl = document.getElementById("status");
     const progressBar = document.getElementById("progressBar");
 
@@ -126,6 +227,14 @@
 
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    function setButtonsBusy(busy) {
+      usbBtn.disabled = busy || !rawPayload;
+      uploadBtn.disabled = busy || !rawPayload;
+      nextImgBtn.disabled = busy;
+      showQrBtn.disabled = busy;
+      clearImgsBtn.disabled = busy;
+    }
 
     fileInput.addEventListener("change", (e) => {
       const file = e.target.files[0];
@@ -142,6 +251,10 @@
       if (loadedImg) processImage();
     });
 
+    scaleMode.addEventListener("change", () => {
+      if (loadedImg) processImage();
+    });
+
     orientationMode.addEventListener("change", () => {
       const isPortrait = orientationMode.value !== "landscape";
       canvas.width = isPortrait ? 240 : 400;
@@ -152,6 +265,24 @@
       if (loadedImg) processImage();
     });
 
+    brightnessSlider.addEventListener("input", () => {
+      bVal.textContent = brightnessSlider.value;
+      if (loadedImg) processImage();
+    });
+
+    contrastSlider.addEventListener("input", () => {
+      cVal.textContent = contrastSlider.value;
+      if (loadedImg) processImage();
+    });
+
+    resetAdjustBtn.addEventListener("click", () => {
+      brightnessSlider.value = "0";
+      contrastSlider.value = "0";
+      bVal.textContent = "0";
+      cVal.textContent = "0";
+      if (loadedImg) processImage();
+    });
+
     function processImage() {
       const cw = canvas.width;
       const ch = canvas.height;
@@ -159,7 +290,9 @@
       ctx.fillStyle = "#ffffff";
       ctx.fillRect(0, 0, cw, ch);
 
-      const scale = Math.min(cw / loadedImg.width, ch / loadedImg.height);
+      const scale = scaleMode.value === "fill"
+        ? Math.max(cw / loadedImg.width, ch / loadedImg.height)
+        : Math.min(cw / loadedImg.width, ch / loadedImg.height);
       const w = loadedImg.width * scale;
       const h = loadedImg.height * scale;
       const x = (cw - w) / 2;
@@ -167,9 +300,8 @@
       ctx.drawImage(loadedImg, x, y, w, h);
 
       rawPayload = convertCanvasTo2BppBytes(paletteMode.value, orientationMode.value);
-      uploadBtn.disabled = false;
-      usbBtn.disabled = false;
-      statusEl.textContent = `Ready (${cw}×${ch})! Payload size: ${rawPayload.byteLength} bytes.`;
+      setButtonsBusy(false);
+      statusEl.textContent = `Ready (${cw}×${ch}, ${scaleMode.value.toUpperCase()})! Payload size: ${rawPayload.byteLength} bytes.`;
     }
 
     function nearestColorIndex(r, g, b, mode) {
@@ -200,10 +332,24 @@
       const data = imgData.data;
       const buf = new Float32Array(cw * ch * 3);
 
+      const brightness = parseInt(brightnessSlider.value, 10) || 0;
+      const contrast = parseInt(contrastSlider.value, 10) || 0;
+      const cFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+
       for (let i = 0; i < cw * ch; i++) {
-        buf[i * 3]     = data[i * 4];
-        buf[i * 3 + 1] = data[i * 4 + 1];
-        buf[i * 3 + 2] = data[i * 4 + 2];
+        let r = data[i * 4];
+        let g = data[i * 4 + 1];
+        let b = data[i * 4 + 2];
+
+        if (brightness !== 0 || contrast !== 0) {
+          r = cFactor * (r + brightness - 128) + 128;
+          g = cFactor * (g + brightness - 128) + 128;
+          b = cFactor * (b + brightness - 128) + 128;
+        }
+
+        buf[i * 3]     = Math.max(0, Math.min(255, r));
+        buf[i * 3 + 1] = Math.max(0, Math.min(255, g));
+        buf[i * 3 + 2] = Math.max(0, Math.min(255, b));
       }
 
       const canvasIndices = new Uint8Array(cw * ch);
@@ -258,11 +404,9 @@
           for (let hx = 0; hx < HW_WIDTH; hx++) {
             let px, py;
             if (orient === "portrait_cw") {
-              // 90° Clockwise rotation into 400x240 buffer
               px = hy;
               py = (HW_WIDTH - 1) - hx;
             } else {
-              // 90° Counter-Clockwise rotation into 400x240 buffer
               px = (HW_HEIGHT - 1) - hy;
               py = hx;
             }
@@ -296,11 +440,11 @@
         statusEl.textContent = "Web Serial is not supported in this browser.";
         return;
       }
+      remoteTransport.value = "usb";
       let port = null;
       let writer = null;
       try {
-        usbBtn.disabled = true;
-        uploadBtn.disabled = true;
+        setButtonsBusy(true);
         statusEl.textContent = "Select your Badge USB Serial port...";
 
         port = await navigator.serial.requestPort();
@@ -316,7 +460,6 @@
         progressBar.value = 0;
         const startTime = performance.now();
 
-        // 60 bytes is divisible by 3 (80 Base64 chars, zero padding, never overflows ESP32 RX FIFO)
         const RAW_STEP = 60;
         for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
           const b64 = toBase64(rawPayload.subarray(offset, offset + RAW_STEP));
@@ -329,12 +472,12 @@
           statusEl.textContent = `Uploading via USB... ${pct}% (${doneBytes} / 24000 bytes)`;
         }
 
-        statusEl.textContent = "Refreshing ePaper display...";
+        statusEl.textContent = "Saving to Flash & refreshing ePaper display...";
         await writer.write(enc.encode("\x10e();\n"));
         await new Promise((r) => setTimeout(r, 300));
 
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-        statusEl.textContent = `USB Upload complete in ${elapsed}s! Badge is refreshing.`;
+        statusEl.textContent = `USB Upload complete in ${elapsed}s! Saved to badge & refreshing.`;
       } catch (err) {
         statusEl.textContent = "USB Error: " + err.message;
       } finally {
@@ -342,8 +485,7 @@
         if (port) {
           try { await port.close(); } catch (e) {}
         }
-        usbBtn.disabled = false;
-        uploadBtn.disabled = false;
+        setButtonsBusy(false);
       }
     });
 
@@ -364,10 +506,10 @@
 
     uploadBtn.addEventListener("click", async () => {
       if (!navigator.bluetooth || !rawPayload) return;
+      remoteTransport.value = "ble";
 
       try {
-        uploadBtn.disabled = true;
-        usbBtn.disabled = true;
+        setButtonsBusy(true);
         statusEl.textContent = "Requesting Bluetooth device...";
 
         const device = await navigator.bluetooth.requestDevice({
@@ -399,11 +541,11 @@
           statusEl.textContent = `Uploading via BLE... ${pct}% (${doneBytes} / 24000 bytes)`;
         }
 
-        statusEl.textContent = "Refreshing ePaper display...";
+        statusEl.textContent = "Saving to Flash & refreshing ePaper display...";
         await sendBleFast(rxChar, "\x10e();\n");
 
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-        statusEl.textContent = `BLE Upload complete in ${elapsed}s! Badge is now drawing your image.`;
+        statusEl.textContent = `BLE Upload complete in ${elapsed}s! Saved to badge & refreshing.`;
 
         setTimeout(() => {
           if (device.gatt.connected) device.gatt.disconnect();
@@ -411,9 +553,82 @@
       } catch (err) {
         statusEl.textContent = "BLE Error: " + err.message;
       } finally {
-        uploadBtn.disabled = false;
-        usbBtn.disabled = false;
+        setButtonsBusy(false);
       }
+    });
+
+    // --- 3. REMOTE CONTROL COMMAND HELPER (USB OR BLE) ---
+    async function sendRemoteAction(jsCmd, actionLabel) {
+      const mode = remoteTransport.value;
+      setButtonsBusy(true);
+
+      if (mode === "usb") {
+        if (!navigator.serial) {
+          statusEl.textContent = "Web Serial is not supported in this browser.";
+          setButtonsBusy(false);
+          return;
+        }
+        let port = null;
+        let writer = null;
+        try {
+          statusEl.textContent = `${actionLabel}: Select Badge USB port...`;
+          port = await navigator.serial.requestPort();
+          await port.open({ baudRate: 115200 });
+          writer = port.writable.getWriter();
+          const enc = new TextEncoder();
+          await writer.write(enc.encode(`\x10${jsCmd}\n`));
+          await new Promise((r) => setTimeout(r, 250));
+          statusEl.textContent = `${actionLabel} sent via USB! Badge is updating.`;
+        } catch (err) {
+          statusEl.textContent = `USB Error: ${err.message}`;
+        } finally {
+          if (writer) writer.releaseLock();
+          if (port) {
+            try { await port.close(); } catch (e) {}
+          }
+          setButtonsBusy(false);
+        }
+      } else {
+        if (!navigator.bluetooth) {
+          statusEl.textContent = "Web Bluetooth is not supported in this browser.";
+          setButtonsBusy(false);
+          return;
+        }
+        try {
+          statusEl.textContent = `${actionLabel}: Connecting via Bluetooth...`;
+          const device = await navigator.bluetooth.requestDevice({
+            acceptAllDevices: true,
+            optionalServices: [NUS_SERVICE_UUID]
+          });
+          const server = await device.gatt.connect();
+          const service = await server.getPrimaryService(NUS_SERVICE_UUID);
+          const rxChar = await service.getCharacteristic(NUS_RX_UUID);
+
+          await sendBleFast(rxChar, `\x10Bluetooth.setConsole();${jsCmd}\n`);
+          statusEl.textContent = `${actionLabel} sent via Bluetooth! Badge is updating.`;
+
+          setTimeout(() => {
+            if (device.gatt.connected) device.gatt.disconnect();
+          }, 1000);
+        } catch (err) {
+          statusEl.textContent = `BLE Error: ${err.message}`;
+        } finally {
+          setButtonsBusy(false);
+        }
+      }
+    }
+
+    nextImgBtn.addEventListener("click", () => {
+      sendRemoteAction("nextImage();", "Next Image");
+    });
+
+    showQrBtn.addEventListener("click", () => {
+      sendRemoteAction("showQRScreen();", "Show QR Screen");
+    });
+
+    clearImgsBtn.addEventListener("click", () => {
+      if (!confirm("Erase all saved images from the badge's Flash memory?")) return;
+      sendRemoteAction("clearImages();showQRScreen();", "Clear All Images");
     });
   </script>
 </body>
