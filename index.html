@@ -50,8 +50,13 @@
       color: white;
       border: none;
     }
-    button.primary:disabled {
-      background: #94a3b8;
+    button.usb {
+      background: #059669;
+      color: white;
+      border: none;
+    }
+    button:disabled {
+      background: #94a3b8 !important;
       cursor: not-allowed;
     }
     #status {
@@ -82,7 +87,8 @@
     <canvas id="preview" width="400" height="240"></canvas>
 
     <div class="controls">
-      <button id="uploadBtn" class="primary" disabled>Connect & Upload to Badge</button>
+      <button id="usbBtn" class="usb" disabled>⚡ Upload via USB (~1.5s)</button>
+      <button id="uploadBtn" class="primary" disabled>📶 Upload via Bluetooth (~10s)</button>
     </div>
 
     <progress id="progressBar" value="0" max="100"></progress>
@@ -95,7 +101,6 @@
     const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
     const NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
 
-    // Official Espruino Badge Palette: 0=Black, 1=White, 2=Yellow, 3=Red
     const PALETTE_BWYR = [
       [0, 0, 0],       // 0: Black
       [255, 255, 255], // 1: White
@@ -108,6 +113,7 @@
     const canvas = document.getElementById("preview");
     const ctx = canvas.getContext("2d");
     const uploadBtn = document.getElementById("uploadBtn");
+    const usbBtn = document.getElementById("usbBtn");
     const statusEl = document.getElementById("status");
     const progressBar = document.getElementById("progressBar");
 
@@ -145,13 +151,14 @@
 
       rawPayload = convertCanvasTo2BppBytes(paletteMode.value);
       uploadBtn.disabled = false;
-      statusEl.textContent = `Ready! Raw binary size: ${rawPayload.byteLength} bytes.`;
+      usbBtn.disabled = false;
+      statusEl.textContent = `Ready! Payload size: ${rawPayload.byteLength} bytes.`;
     }
 
     function nearestColorIndex(r, g, b, mode) {
       if (mode === "bw") {
         const lum = 0.299 * r + 0.587 * g + 0.114 * b;
-        return lum < 128 ? 0 : 1; // 0=Black, 1=White
+        return lum < 128 ? 0 : 1;
       }
       let bestIdx = 1;
       let bestDist = Infinity;
@@ -182,7 +189,6 @@
 
       const indices = new Uint8Array(WIDTH * HEIGHT);
 
-      // Atkinson Dithering (recommended by Espruino Badge docs)
       for (let y = 0; y < HEIGHT; y++) {
         for (let x = 0; x < WIDTH; x++) {
           const idx = y * WIDTH + x;
@@ -223,7 +229,6 @@
       }
       ctx.putImageData(imgData, 0, 0);
 
-      // Pack 4 pixels per byte (24,000 bytes total)
       const packed = new Uint8Array((WIDTH * HEIGHT) / 4);
       for (let i = 0, bIdx = 0; i < indices.length; i += 4, bIdx++) {
         packed[bIdx] =
@@ -235,70 +240,40 @@
       return packed;
     }
 
-    async function sendCommand(rxChar, cmdStr) {
-      const bytes = new TextEncoder().encode(cmdStr);
-      // 20-byte standard BLE GATT packets with writeValue (acknowledged = 0 dropped packets)
-      for (let i = 0; i < bytes.length; i += 20) {
-        await rxChar.writeValue(bytes.slice(i, i + 20));
+    function toBase64(uint8Slice) {
+      let binStr = "";
+      for (let i = 0; i < uint8Slice.length; i++) {
+        binStr += String.fromCharCode(uint8Slice[i]);
       }
+      return btoa(binStr);
     }
 
-    uploadBtn.addEventListener("click", async () => {
-      if (!navigator.bluetooth || !rawPayload) return;
-
+    // --- 1. WIRED USB UPLOAD (Web Serial API - ~1.5 seconds) ---
+    usbBtn.addEventListener("click", async () => {
+      if (!navigator.serial) {
+        statusEl.textContent = "Web Serial is not supported in this browser.";
+        return;
+      }
+      let port = null;
+      let writer = null;
       try {
+        usbBtn.disabled = true;
         uploadBtn.disabled = true;
-        statusEl.textContent = "Requesting Bluetooth device...";
+        statusEl.textContent = "Select your Badge USB Serial port...";
 
-        const device = await navigator.bluetooth.requestDevice({
-          acceptAllDevices: true,
-          optionalServices: [NUS_SERVICE_UUID]
-        });
+        port = await navigator.serial.requestPort();
+        await port.open({ baudRate: 115200 });
+        writer = port.writable.getWriter();
+        const enc = new TextEncoder();
 
-        statusEl.textContent = `Connecting to ${device.name || "Badge"}...`;
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(NUS_SERVICE_UUID);
-        const rxChar = await service.getCharacteristic(NUS_RX_UUID);
-
-        statusEl.textContent = "Initializing badge buffer...";
-        await sendCommand(rxChar, "\x10s();\n");
+        statusEl.textContent = "Initializing badge buffer over USB...";
+        await writer.write(enc.encode("\x10USB.setConsole();s();\n"));
+        await new Promise((r) => setTimeout(r, 80));
 
         progressBar.style.display = "block";
         progressBar.value = 0;
         const startTime = performance.now();
 
-        // Send 180 raw bytes (240 Base64 chars) per command
-        const RAW_STEP = 180;
+        const RAW_STEP = 360; // 480 Base64 chars per line over USB
         for (let offset = 0; offset < rawPayload.byteLength; offset += RAW_STEP) {
-          const slice = rawPayload.subarray(offset, offset + RAW_STEP);
-          let binStr = "";
-          for (let i = 0; i < slice.length; i++) {
-            binStr += String.fromCharCode(slice[i]);
-          }
-          const b64 = btoa(binStr);
-          await sendCommand(rxChar, `\x10u("${b64}");\n`);
-
-          const doneBytes = Math.min(rawPayload.byteLength, offset + RAW_STEP);
-          const pct = Math.round((doneBytes / rawPayload.byteLength) * 100);
-          progressBar.value = pct;
-          statusEl.textContent = `Uploading... ${pct}% (${doneBytes} / 24000 bytes)`;
-        }
-
-        statusEl.textContent = "Refreshing ePaper display...";
-        await sendCommand(rxChar, "\x10e();\n");
-
-        const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
-        statusEl.textContent = `Upload complete in ${elapsed}s! Badge is now drawing your image.`;
-
-        setTimeout(() => {
-          if (device.gatt.connected) device.gatt.disconnect();
-        }, 1500);
-      } catch (err) {
-        statusEl.textContent = "Error: " + err.message;
-      } finally {
-        uploadBtn.disabled = false;
-      }
-    });
-  </script>
-</body>
-</html>
+          const b64 = toBase64(rawPayload.subarray(offset,
