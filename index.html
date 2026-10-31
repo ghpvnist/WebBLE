@@ -1,263 +1,161 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>ePaper Badge Image Uploader</title>
-  <style>
-    body {
-      font-family: system-ui, -apple-system, sans-serif;
-      max-width: 540px;
-      margin: 40px auto;
-      padding: 0 20px;
-      background: #f8fafc;
-      color: #0f172a;
+<script>
+  const WIDTH = 400;
+  const HEIGHT = 240;
+  const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
+  const NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+
+  const fileInput = document.getElementById("fileInput");
+  const canvas = document.getElementById("preview");
+  const ctx = canvas.getContext("2d");
+  const uploadBtn = document.getElementById("uploadBtn");
+  const statusEl = document.getElementById("status");
+  const progressBar = document.getElementById("progressBar");
+
+  let rawPayload = null; // Uint8Array(24000)
+
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  fileInput.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const img = new Image();
+    img.onload = () => {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+      const scale = Math.min(WIDTH / img.width, HEIGHT / img.height);
+      const w = img.width * scale;
+      const h = img.height * scale;
+      const x = (WIDTH - w) / 2;
+      const y = (HEIGHT - h) / 2;
+      ctx.drawImage(img, x, y, w, h);
+
+      rawPayload = convertCanvasTo2BppBytes();
+      uploadBtn.disabled = false;
+      statusEl.textContent = `Ready! Raw binary size: ${rawPayload.byteLength} bytes.`;
+    };
+    img.src = URL.createObjectURL(file);
+  });
+
+  function convertCanvasTo2BppBytes() {
+    const imgData = ctx.getImageData(0, 0, WIDTH, HEIGHT);
+    const data = imgData.data;
+    const gray = new Float32Array(WIDTH * HEIGHT);
+
+    for (let i = 0; i < WIDTH * HEIGHT; i++) {
+      gray[i] = 0.299 * data[i * 4] + 0.587 * data[i * 4 + 1] + 0.114 * data[i * 4 + 2];
     }
-    .card {
-      background: #ffffff;
-      padding: 24px;
-      border-radius: 12px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.06);
-    }
-    h2 { margin-top: 0; }
-    canvas {
-      border: 2px solid #cbd5e1;
-      border-radius: 6px;
-      width: 100%;
-      max-width: 400px;
-      height: auto;
-      display: block;
-      margin: 16px 0;
-      background: #fff;
-    }
-    .controls {
-      display: flex;
-      gap: 10px;
-      flex-wrap: wrap;
-      margin-top: 16px;
-    }
-    button, input[type="file"] {
-      padding: 10px 16px;
-      font-size: 14px;
-      font-weight: 600;
-      border-radius: 8px;
-      border: 1px solid #cbd5e1;
-      cursor: pointer;
-    }
-    button.primary {
-      background: #2563eb;
-      color: white;
-      border: none;
-    }
-    button.primary:disabled {
-      background: #94a3b8;
-      cursor: not-allowed;
-    }
-    #status {
-      margin-top: 16px;
-      font-size: 14px;
-      white-space: pre-line;
-      color: #334155;
-    }
-    progress {
-      width: 100%;
-      height: 12px;
-      margin-top: 10px;
-      display: none;
-    }
-  </style>
-</head>
-<body>
-  <div class="card">
-    <h2>ePaper Badge Uploader (400×240 2-bpp)</h2>
-    <input type="file" id="fileInput" accept="image/*" />
-    
-    <!-- 400x240 preview canvas -->
-    <canvas id="preview" width="400" height="240"></canvas>
 
-    <div class="controls">
-      <button id="uploadBtn" class="primary" disabled>Connect & Upload to Badge</button>
-    </div>
+    const levels = new Uint8Array(WIDTH * HEIGHT);
+    for (let y = 0; y < HEIGHT; y++) {
+      for (let x = 0; x < WIDTH; x++) {
+        const idx = y * WIDTH + x;
+        const oldVal = Math.max(0, Math.min(255, gray[idx]));
+        const level = Math.round((oldVal / 255) * 3);
+        const newVal = level * 85;
+        levels[idx] = level;
 
-    <progress id="progressBar" value="0" max="100"></progress>
-    <div id="status">Select an image to preview and convert.</div>
-  </div>
+        data[idx * 4] = data[idx * 4 + 1] = data[idx * 4 + 2] = newVal;
+        data[idx * 4 + 3] = 255;
 
-  <script>
-    const WIDTH = 400;
-    const HEIGHT = 240;
-    const NUS_SERVICE_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
-    const NUS_RX_UUID      = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
-
-    const fileInput = document.getElementById("fileInput");
-    const canvas = document.getElementById("preview");
-    const ctx = canvas.getContext("2d");
-    const uploadBtn = document.getElementById("uploadBtn");
-    const statusEl = document.getElementById("status");
-    const progressBar = document.getElementById("progressBar");
-
-    let base64Payload = "";
-
-    // Fill initial white screen
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, WIDTH, HEIGHT);
-
-    fileInput.addEventListener("change", (e) => {
-      const file = e.target.files[0];
-      if (!file) return;
-
-      const img = new Image();
-      img.onload = () => {
-        // Draw image scaled to fit/cover 400x240
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0, 0, WIDTH, HEIGHT);
-
-        const scale = Math.min(WIDTH / img.width, HEIGHT / img.height);
-        const w = img.width * scale;
-        const h = img.height * scale;
-        const x = (WIDTH - w) / 2;
-        const y = (HEIGHT - h) / 2;
-        ctx.drawImage(img, x, y, w, h);
-
-        // Convert to 2-bpp (4 levels: 0=black, 1=dark gray, 2=light gray, 3=white)
-        base64Payload = convertCanvasTo2BppBase64();
-        uploadBtn.disabled = false;
-        statusEl.textContent = `Ready! Encoded payload size: ${base64Payload.length} chars (24,000 raw bytes).`;
-      };
-      img.src = URL.createObjectURL(file);
-    });
-
-    function convertCanvasTo2BppBase64() {
-      const imgData = ctx.getImageData(0, 0, WIDTH, HEIGHT);
-      const data = imgData.data;
-      const gray = new Float32Array(WIDTH * HEIGHT);
-
-      // Compute luminance
-      for (let i = 0; i < WIDTH * HEIGHT; i++) {
-        const r = data[i * 4];
-        const g = data[i * 4 + 1];
-        const b = data[i * 4 + 2];
-        gray[i] = 0.299 * r + 0.587 * g + 0.114 * b;
+        const err = oldVal - newVal;
+        if (x + 1 < WIDTH) gray[idx + 1] += (err * 7) / 16;
+        if (y + 1 < HEIGHT) {
+          if (x > 0) gray[idx + WIDTH - 1] += (err * 3) / 16;
+          gray[idx + WIDTH] += (err * 5) / 16;
+          if (x + 1 < WIDTH) gray[idx + WIDTH + 1] += (err * 1) / 16;
+        }
       }
+    }
+    ctx.putImageData(imgData, 0, 0);
 
-      // Floyd-Steinberg Dithering to 4 grayscale levels (0, 85, 170, 255)
-      const levels = new Uint8Array(WIDTH * HEIGHT);
-      for (let y = 0; y < HEIGHT; y++) {
-        for (let x = 0; x < WIDTH; x++) {
-          const idx = y * WIDTH + x;
-          const oldVal = Math.max(0, Math.min(255, gray[idx]));
-          const level = Math.round((oldVal / 255) * 3); // 0..3
-          const newVal = level * 85;
-          levels[idx] = level;
+    // Pack 4 pixels per byte (24,000 bytes total)
+    const packed = new Uint8Array((WIDTH * HEIGHT) / 4);
+    for (let i = 0, bIdx = 0; i < levels.length; i += 4, bIdx++) {
+      packed[bIdx] =
+        ((levels[i] & 0x03) << 6) |
+        ((levels[i + 1] & 0x03) << 4) |
+        ((levels[i + 2] & 0x03) << 2) |
+        (levels[i + 3] & 0x03);
+    }
+    return packed;
+  }
 
-          // Update preview pixel
-          data[idx * 4] = data[idx * 4 + 1] = data[idx * 4 + 2] = newVal;
-          data[idx * 4 + 3] = 255;
+  uploadBtn.addEventListener("click", async () => {
+    if (!navigator.bluetooth || !rawPayload) return;
 
-          const err = oldVal - newVal;
-          if (x + 1 < WIDTH) gray[idx + 1] += (err * 7) / 16;
-          if (y + 1 < HEIGHT) {
-            if (x > 0) gray[idx + WIDTH - 1] += (err * 3) / 16;
-            gray[idx + WIDTH] += (err * 5) / 16;
-            if (x + 1 < WIDTH) gray[idx + WIDTH + 1] += (err * 1) / 16;
+    try {
+      uploadBtn.disabled = true;
+      statusEl.textContent = "Requesting Bluetooth device...";
+
+      const device = await navigator.bluetooth.requestDevice({
+        filters: [
+          { namePrefix: "Espruino" },
+          { namePrefix: "MDBT42Q" },
+          { services: [NUS_SERVICE_UUID] }
+        ],
+        optionalServices: [NUS_SERVICE_UUID]
+      });
+
+      statusEl.textContent = `Connecting to ${device.name || "Badge"}...`;
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(NUS_SERVICE_UUID);
+      const rxChar = await service.getCharacteristic(NUS_RX_UUID);
+
+      // 1. Switch badge into raw binary mode
+      statusEl.textContent = "Entering high-speed binary mode...";
+      const initCmd = new TextEncoder().encode("\x10startRawUpload();\n");
+      await rxChar.writeValue(initCmd);
+
+      // Brief pause so Espruino allocates Uint8Array & detaches REPL
+      await new Promise((r) => setTimeout(r, 120));
+
+      // 2. Stream raw binary in 180-byte packets (falls back to 20 if OS rejects high MTU)
+      let packetSize = 180;
+      progressBar.style.display = "block";
+      progressBar.value = 0;
+      const startTime = performance.now();
+
+      for (let offset = 0; offset < rawPayload.byteLength; offset += packetSize) {
+        const chunk = rawPayload.subarray(offset, offset + packetSize);
+        try {
+          if (rxChar.writeValueWithoutResponse) {
+            await rxChar.writeValueWithoutResponse(chunk);
+          } else {
+            await rxChar.writeValue(chunk);
           }
+        } catch (mtuErr) {
+          // If adapter only supports 20-byte MTU, step down automatically
+          if (packetSize > 20) {
+            packetSize = 20;
+            offset -= 180; // retry current offset at 20 bytes
+            continue;
+          }
+          throw mtuErr;
         }
-      }
-      ctx.putImageData(imgData, 0, 0);
 
-      // Pack 4 pixels per byte (MSB first, 2 bits per pixel: 400*240 / 4 = 24,000 bytes)
-      const packed = new Uint8Array((WIDTH * HEIGHT) / 4);
-      for (let i = 0, bIdx = 0; i < levels.length; i += 4, bIdx++) {
-        packed[bIdx] =
-          ((levels[i] & 0x03) << 6) |
-          ((levels[i + 1] & 0x03) << 4) |
-          ((levels[i + 2] & 0x03) << 2) |
-          (levels[i + 3] & 0x03);
-      }
+        // 4ms pacing keeps nRF52 RX buffer from overflowing during writeWithoutResponse
+        await new Promise((r) => setTimeout(r, 4));
 
-      // Convert Uint8Array to binary string then Base64
-      let binary = "";
-      const chunkSz = 8192;
-      for (let i = 0; i < packed.length; i += chunkSz) {
-        binary += String.fromCharCode.apply(null, packed.subarray(i, i + chunkSz));
-      }
-      return btoa(binary);
-    }
-
-    async function writeTextToBle(rxChar, str) {
-      const encoder = new TextEncoder();
-      const bytes = encoder.encode(str);
-      // 20-byte safe BLE GATT packet size (or larger if MTU negotiated, 20 works universally)
-      const BLE_MTU = 20;
-      for (let i = 0; i < bytes.length; i += BLE_MTU) {
-        const slice = bytes.slice(i, i + BLE_MTU);
-        if (rxChar.writeValueWithoutResponse) {
-          await rxChar.writeValueWithoutResponse(slice);
-        } else {
-          await rxChar.writeValue(slice);
-        }
-        await new Promise((r) => setTimeout(r, 8));
-      }
-    }
-
-    uploadBtn.addEventListener("click", async () => {
-      if (!navigator.bluetooth) {
-        statusEl.textContent = "Web Bluetooth is not supported in this browser.";
-        return;
-      }
-
-      try {
-        uploadBtn.disabled = true;
-        statusEl.textContent = "Requesting Bluetooth device...";
-
-        const device = await navigator.bluetooth.requestDevice({
-          filters: [
-            { namePrefix: "Espruino" },
-            { namePrefix: "MDBT42Q" },
-            { services: [NUS_SERVICE_UUID] }
-          ],
-          optionalServices: [NUS_SERVICE_UUID]
-        });
-
-        statusEl.textContent = `Connecting to ${device.name || "Badge"}...`;
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService(NUS_SERVICE_UUID);
-        const rxChar = await service.getCharacteristic(NUS_RX_UUID);
-
-        // Reset buffer on badge
-        statusEl.textContent = "Clearing badge buffer...";
-        await writeTextToBle(rxChar, '\x10imgData="";\n');
-
-        // Send Base64 string in rcvChunk(...) calls
-        const CHUNK_LEN = 256;
-        const totalChunks = Math.ceil(base64Payload.length / CHUNK_LEN);
-        progressBar.style.display = "block";
-        progressBar.value = 0;
-
-        for (let i = 0, step = 0; i < base64Payload.length; i += CHUNK_LEN, step++) {
-          const part = base64Payload.slice(i, i + CHUNK_LEN);
-          const cmd = `\x10rcvChunk("${part}");\n`;
-          await writeTextToBle(rxChar, cmd);
-
-          const pct = Math.round(((step + 1) / totalChunks) * 100);
+        if (offset % 1800 === 0 || offset + packetSize >= rawPayload.byteLength) {
+          const pct = Math.min(100, Math.round(((offset + packetSize) / rawPayload.byteLength) * 100));
           progressBar.value = pct;
-          statusEl.textContent = `Uploading over BLE... ${pct}% (${step + 1}/${totalChunks})`;
+          statusEl.textContent = `Streaming binary... ${pct}% (${Math.min(rawPayload.byteLength, offset + packetSize)} / 24000 B)`;
         }
-
-        // Trigger render on ePaper display
-        statusEl.textContent = "Triggering ePaper refresh (rcvEnd)...";
-        await writeTextToBle(rxChar, "\x10rcvEnd();\n");
-
-        statusEl.textContent = "Upload complete! Your ePaper badge is now refreshing.";
-        setTimeout(() => {
-          if (device.gatt.connected) device.gatt.disconnect();
-        }, 1500);
-      } catch (err) {
-        statusEl.textContent = "Error: " + err.message;
-      } finally {
-        uploadBtn.disabled = false;
       }
-    });
-  </script>
-</body>
-</html>
+
+      const elapsed = ((performance.now() - startTime) / 1000).toFixed(1);
+      statusEl.textContent = `Done in ${elapsed}s! Refreshing ePaper display...`;
+
+      setTimeout(() => {
+        if (device.gatt.connected) device.gatt.disconnect();
+      }, 1500);
+    } catch (err) {
+      statusEl.textContent = "Error: " + err.message;
+    } finally {
+      uploadBtn.disabled = false;
+    }
+  });
+</script>
