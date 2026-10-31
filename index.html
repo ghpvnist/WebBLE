@@ -943,13 +943,12 @@
       const CHUNK_SZ = 20;
       for (let i = 0; i < bytes.length; i += CHUNK_SZ) {
         const chunk = bytes.slice(i, i + CHUNK_SZ);
-        if (rxChar.writeValueWithoutResponse) {
-          await rxChar.writeValueWithoutResponse(chunk);
+        // Use writeValue (Write With Response) so ESP32-C3 GATTS_SendRsp has a valid op_code and never errors
+        if (rxChar.writeValueWithResponse) {
+          await rxChar.writeValueWithResponse(chunk);
         } else {
           await rxChar.writeValue(chunk);
         }
-        // Always pause 14ms on both writeValue and writeValueWithoutResponse so Bluefy on iOS never floods GATT
-        await new Promise((r) => setTimeout(r, 14));
       }
     }
 
