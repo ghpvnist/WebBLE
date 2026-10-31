@@ -945,13 +945,15 @@
       }
     }
 
+    // Auto-select Bluetooth mode on mobile/iPhone where Web Serial is unavailable
+    if (!navigator.serial && navigator.bluetooth) {
+      setTransport("ble");
+    }
+
     async function requestBleDevice() {
+      // acceptAllDevices: true is required for Bluefy on iOS to list Espruino 935a reliably
       return navigator.bluetooth.requestDevice({
-        filters: [
-          { namePrefix: "Espruino" },
-          { namePrefix: "Badge" },
-          { services: [NUS_SERVICE_UUID] }
-        ],
+        acceptAllDevices: true,
         optionalServices: [NUS_SERVICE_UUID]
       });
     }
