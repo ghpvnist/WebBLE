@@ -243,11 +243,7 @@
         statusEl.textContent = "Requesting Bluetooth device...";
 
         const device = await navigator.bluetooth.requestDevice({
-          filters: [
-            { namePrefix: "Espruino" },
-            { namePrefix: "MDBT42Q" },
-            { services: [NUS_SERVICE_UUID] }
-          ],
+          acceptAllDevices: true,
           optionalServices: [NUS_SERVICE_UUID]
         });
 
